@@ -1,5 +1,7 @@
 # 小小电路城 ⚡
 
+![预览：电池 → 开关 → 电阻 → LED，电流正在流动](docs/preview.png)
+
 给 5 岁小朋友的网页电路模拟实验室：把电池、电阻、LED、灯泡、喇叭、二极管、电机、面包板拖到工作台上，用小圆点连电线，按「通电试试」就能看到电流在电线里流动。电路短路时，会「砰」地爆炸一下，提醒小朋友：电线不能直接连电池两头。
 
 ## 怎么打开
@@ -65,6 +67,7 @@ assets/ui.js            渲染、面板、弹窗、爆炸特效
 assets/interact.js      拖放、连线、键盘交互
 assets/app.js           状态管理、运行控制、声音、示例
 assets/components/      元件图形（来自 Velxio：LED、电阻、面包板 SVG）
+docs/preview.png        README 预览截图
 CREDITS.md              素材来源与版权说明
 LICENSE                 本项目许可证（AGPL-3.0）
 ```
