@@ -24,6 +24,11 @@
   };
   function ledFile(color) { return LED_FILES[color] || 'led-red.svg'; }
 
+  /* 真实 LED 的正向压降（伏）：红光最低，蓝/白光最高。
+     数字按常见 5mm LED 在小电流下的数据取，3V 电池点蓝光会偏暗，4.5V 才够亮。 */
+  var LED_VF = { '#ff5d5d': 1.8, '#facc15': 1.9, '#22c55e': 2.0, '#3b82f6': 2.6, '#f8fafc': 2.6 };
+  function ledVf(p) { return LED_VF[(p && p.props && p.props.color) || ''] || 1.8; }
+
   var PARTS = {
 
     battery: {
@@ -31,6 +36,11 @@
       terms: [{ id: 'neg', x: 14, y: 54, label: '−', tone: 'neg' },
               { id: 'pos', x: 136, y: 54, label: '+', tone: 'pos' }],
       model: function (p) { return { kind: 'source', p: 'pos', n: 'neg', v: p.props.voltage || 3, r: 0.18 }; },
+      /* 真实参数：内阻约 0.18Ω；规格文字会显示在「零件秘密」面板里 */
+      spec: {
+        maxA: 3,
+        text: function (p) { return (p.props.voltage || 3) + 'V · 内阻约 0.18Ω'; }
+      },
       art: function (p) {
         var v = p.props.voltage || 3;
         var body = v >= 9 ? '#b03a2e' : '#336699';
@@ -51,6 +61,10 @@
       name: '开关', short: '开关', w: 140, h: 86,
       terms: [{ id: 'a', x: 14, y: 58 }, { id: 'b', x: 126, y: 58 }],
       model: function (p) { return { kind: 'resistor', a: 'a', b: 'b', r: p.props.closed ? 0.02 : 1e12 }; },
+      spec: {
+        maxA: 1.5,
+        text: '额定电流 1.5A'
+      },
       art: function (p) {
         var rot = p.props.closed ? 0 : -34;
         return svg(140, 86,
@@ -69,6 +83,10 @@
       name: '电阻', short: '电阻', w: 150, h: 58,
       terms: [{ id: 'a', x: 10, y: 30 }, { id: 'b', x: 140, y: 30 }],
       model: function (p) { return { kind: 'resistor', a: 'a', b: 'b', r: p.props.resistance || 100 }; },
+      spec: {
+        maxW: 0.25,
+        text: function (p) { return fmtR(p.props.resistance) + ' · 额定功率 1/4W'; }
+      },
       art: function (p) {
         return svg(150, 58,
           '<text x="75" y="52" text-anchor="middle" font-size="11.5" font-weight="800" fill="#7a6a52">' + fmtR(p.props.resistance) + '</text>') +
@@ -79,7 +97,12 @@
     led: {
       name: 'LED 灯', short: 'LED', w: 132, h: 136,
       terms: [{ id: 'an', x: 16, y: 112, label: '+', tone: 'pos' }, { id: 'ca', x: 116, y: 112 }],
-      model: function (p) { return { kind: 'diode', a: 'an', b: 'ca', rf: 110, rr: 1e9 }; },
+      /* 真实 LED = 一个正向压降 + 一小段动态电阻；超过额定电流会烧坏 */
+      model: function (p) { return { kind: 'diode', a: 'an', b: 'ca', vf: ledVf(p), rf: 10, rr: 1e9 }; },
+      spec: {
+        maxA: 0.02,
+        text: function (p) { return '正向 ' + ledVf(p).toFixed(1) + 'V · 额定电流 20mA'; }
+      },
       art: function (p) {
         var color = p.props.color || '#ff5d5d';
         return svg(132, 136,
@@ -100,6 +123,10 @@
       name: '小灯泡', short: '灯泡', w: 140, h: 126,
       terms: [{ id: 'a', x: 16, y: 108 }, { id: 'b', x: 124, y: 108 }],
       model: function () { return { kind: 'resistor', a: 'a', b: 'b', r: 70 }; },
+      spec: {
+        maxA: 0.08,
+        text: '3V 时约 43mA · 额定 80mA'
+      },
       art: function () {
         return svg(140, 126,
           '<circle class="glow" cx="70" cy="46" r="34" fill="#ffd166" opacity="0"/>' +
@@ -123,6 +150,10 @@
       name: '喇叭', short: '喇叭', w: 140, h: 112,
       terms: [{ id: 'a', x: 14, y: 92 }, { id: 'b', x: 126, y: 92 }],
       model: function () { return { kind: 'resistor', a: 'a', b: 'b', r: 85 }; },
+      spec: {
+        maxA: 0.06,
+        text: '3V 时约 35mA · 额定 60mA'
+      },
       art: function () {
         return svg(140, 112,
           '<path d="M14 92 V86 Q14 82 24 82 H44" fill="none" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
@@ -141,7 +172,12 @@
     diode: {
       name: '二极管', short: '二极管', w: 134, h: 74,
       terms: [{ id: 'an', x: 12, y: 42, label: '+', tone: 'pos' }, { id: 'ca', x: 122, y: 42 }],
-      model: function () { return { kind: 'diode', a: 'an', b: 'ca', rf: 0.5, rr: 1e9 }; },
+      /* 1N4148 一类的硅二极管：正向压降约 0.7V，额定 200mA */
+      model: function () { return { kind: 'diode', a: 'an', b: 'ca', vf: 0.7, rf: 1, rr: 1e9 }; },
+      spec: {
+        maxA: 0.2,
+        text: '正向压降 0.7V · 额定 200mA'
+      },
       art: function () {
         return svg(134, 74,
           '<line x1="12" y1="42" x2="46" y2="42" stroke="#b8c2cc" stroke-width="5" stroke-linecap="round"/>' +
@@ -158,6 +194,10 @@
       name: '电动机', short: '电机', w: 150, h: 124,
       terms: [{ id: 'a', x: 14, y: 106 }, { id: 'b', x: 136, y: 106 }],
       model: function () { return { kind: 'resistor', a: 'a', b: 'b', r: 20 }; },
+      spec: {
+        maxA: 0.3,
+        text: '3V 时约 150mA · 额定 300mA'
+      },
       art: function () {
         return svg(150, 124,
           '<path d="M14 106 V96 Q14 88 28 88 H40" fill="none" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
@@ -184,6 +224,10 @@
           { kind: 'resistor', a: 'vp1', b: 'vp2', r: 0.03 },
           { kind: 'resistor', a: 'vn1', b: 'vn2', r: 0.03 }
         ];
+      },
+      spec: {
+        maxA: 1.5,
+        text: '电源轨载流 1.5A'
       },
       art: function () {
         return img('breadboard.svg', 10, 12, 480, 155);
@@ -224,42 +268,42 @@
     battery: {
       what: '电池是电流的发动机。它把电从正极 + 推出来，经过电线和小零件，再让电流回到负极 −。',
       how: '电线一头接电池的 +，另一头接 −，中间要经过用电器。',
-      tip: '千万不要用一根电线直接把 + 和 − 连起来，那样会短路。真的电池会发烫，很危险。'
+      tip: '真实电池有 0.18 欧姆左右的内阻，所以电流不会大到没边。但千万不要用一根电线直接把 + 和 − 连起来，那样会短路，真的电池会发烫，很危险。'
     },
     switch: {
       what: '开关是一座小桥。合上时电流能过去，断开时电流就过不去。',
       how: '两个接线柱分别接在电路里，点一下开关，就能合上或者断开。',
-      tip: '电路不工作时，先看看开关是不是断开了。'
+      tip: '电路不工作时，先看看开关是不是断开了。真的开关能通过的电流是有限的，大约 1.5 安培。'
     },
     resistor: {
       what: '电阻是电流的减速带。它把电流变小，保护 LED 不被烧坏。',
       how: '电阻没有方向，随便哪一头接一边，通常和 LED 手拉手串在一起。',
-      tip: '100 欧姆电流大，1 千欧电流小。LED 太亮或者烧坏时，换一个更大的电阻。'
+      tip: '100 欧姆电流大，1 千欧电流小。真实的电阻能承受的功率是 1/4 瓦，电流太大它会发烫、冒烟，然后烧坏。'
     },
     led: {
       what: 'LED 是一种小灯泡，电流通过时它会发光，而且很省电。',
       how: '长脚是正极 +，接电池正极那一边；短脚接负极那一边。',
-      tip: '接反了不会亮。一定要串一个电阻，不然它会烧坏。'
+      tip: '红光 LED 正向只要 1.8 伏，蓝光、白光要 2.6 伏，所以 3V 电池点蓝光会偏暗。接反了不会亮。一定要串一个电阻，不然电流会超过 20 毫安，它会马上烧坏。'
     },
     lamp: {
       what: '小灯泡里有一根灯丝。电流把灯丝烧得热热的，就发光了。',
       how: '两个接线柱没有方向，接在电路里就行。',
-      tip: '灯泡自己会限制电流，可以直接接电池，但电压太高也会烧坏。'
+      tip: '灯泡自己会限制电流，3V 时大约 43 毫安，可以直接接电池。但额定只有 80 毫安左右，换成 9V 电池，灯丝会烧断。'
     },
     buzzer: {
       what: '喇叭里面有纸盆。电流让它振动，就发出声音啦。',
       how: '两个接线柱接在电路里，电流越大，声音越响。',
-      tip: '喇叭一直响会有点吵，可以在旁边加一个开关。'
+      tip: '喇叭一直响会有点吵，可以在旁边加一个开关。它额定 60 毫安左右，电压太高里面的线圈会烧坏。'
     },
     diode: {
       what: '二极管是电流的单向门。它只让电流从三角形尖尖的方向过去。',
       how: '有 + 的一头接电流来的方向，另一头接电流要去的方向。',
-      tip: '接反了电流就过不去，整个电路都不工作。二极管不是用电器：直接把它接在电池两头等于短路，它会发烫烧坏。'
+      tip: '接反了电流就过不去，整个电路都不工作。真实二极管会吃掉 0.7 伏左右的电压。它不是用电器：直接接在电池两头等于短路，电流超过额定的 200 毫安，它会烧坏。'
     },
     motor: {
       what: '电动机里面有线圈。电流通过时会产生磁力，让电机转起来。',
       how: '两个接线柱接在电路里，电流越大，转得越快。',
-      tip: '电机需要比较大的电流，电池很快就会累。'
+      tip: '电机需要比较大的电流，3V 时约 150 毫安，额定 300 毫安左右。用 9V 电池，线圈会过热烧坏。'
     },
     breadboard: {
       what: '面包板是一块不用焊接的接线板，可以把电分给很多零件。',
@@ -273,8 +317,17 @@
     }
   };
 
+  /* 规格文字（额定值），显示在「零件秘密」面板里，也会读出来 */
+  function specTextOf(part) {
+    var s = part && PARTS[part.type] && PARTS[part.type].spec;
+    if (!s) return '';
+    return typeof s.text === 'function' ? s.text(part) : (s.text || '');
+  }
+
   global.PARTS = PARTS;
   global.PART_GUIDES = PART_GUIDES;
+  global.specTextOf = specTextOf;
+  global.ledVf = ledVf;
   global.PART_ORDER = ['battery', 'wire', 'switch', 'resistor', 'led', 'lamp', 'buzzer', 'diode', 'motor', 'breadboard'];
   global.CHIP_ICONS = CHIP_ICONS;
   global.DEFAULT_PROPS = DEFAULT_PROPS;

@@ -29,17 +29,27 @@
     if (!g) return prefix || '';
     return [prefix, g.what, g.how, g.tip].filter(Boolean).join(' ');
   }
+  /* 额定值也要念出来：这就是「真实电路」里零件能承受的极限 */
+  function specSayOf(part) {
+    var t = global.specTextOf ? specTextOf(part) : '';
+    return t ? '它的额定值是：' + t.replace(/·/g, '，') + '。' : '';
+  }
   function explainType(type) {
     var g = guideOf(type);
     if (!g) return;
     var name = type === 'wire' ? '电线' : (PARTS[type] ? PARTS[type].name : type);
-    speak(name + '。' + explainText(type));
+    var spec = '';
+    if (type === 'wire') spec = '电线能通过的电流大约是 1 安培。';
+    else if (PARTS[type]) spec = specSayOf({ type: type, props: (global.DEFAULT_PROPS && DEFAULT_PROPS[type]) || {} });
+    speak(name + '。' + explainText(type) + ' ' + spec);
   }
   function explainPart(part, prefix) {
     if (!part) return;
     var g = guideOf(part.type);
     if (!g) return;
-    var text = [prefix, PARTS[part.type].name + '。' + g.what, g.how, g.tip].filter(Boolean).join(' ');
+    var burnt = App.state.burnt && App.state.burnt[part.id];
+    var text = [prefix, PARTS[part.type].name + '。' + g.what, g.how, g.tip, specSayOf(part),
+      burnt ? '它现在烧坏了，点「换一个新的」就能继续玩。' : ''].filter(Boolean).join(' ');
     speak(text);
     renderInspector();
   }
@@ -384,10 +394,16 @@
         } else if (p.type === 'diode') { on = a > 0.0008; intensity = Math.min(1, a / 0.05); }
         else if (p.type === 'resistor') { intensity = Math.min(0.8, info.power / 0.6); }
       }
+      var burnt = !!(App.state.burnt && App.state.burnt[p.id]);
+      var heat = (App.state.heat && App.state.heat[p.id]) || 0;
+      if (burnt) { intensity = 0; on = false; }
       node.style.setProperty('--intensity', intensity.toFixed(2));
       node.style.setProperty('--spin', spin.toFixed(2) + 's');
+      node.style.setProperty('--heat', Math.min(1, heat).toFixed(2));
       node.classList.toggle('is-on', !!on);
-      node.classList.toggle('is-rev', !!(info && info.reversed));
+      node.classList.toggle('is-burnt', burnt);
+      node.classList.toggle('is-hot', !burnt && heat > 0.02);
+      node.classList.toggle('is-rev', !!(info && info.reversed) && !burnt);
       var faultNow = App.state.lastFault;
       var live = running || App.state.exploding;   /* 爆炸动画期间也要继续提示是谁短路 */
       var battLoad = 0;
@@ -399,7 +415,13 @@
       node.classList.toggle('is-short', battShort || culpritShort);
       var badge = node.querySelector('.part-badge');
       if (badge) {
-        if (running && info && info.reversed && (p.type === 'led' || p.type === 'diode')) {
+        if (burnt) {
+          badge.textContent = '烧坏啦 💨';
+          badge.className = 'part-badge show burnt';
+        } else if (heat > 0.15) {
+          badge.textContent = '好烫！♨️';
+          badge.className = 'part-badge show hot';
+        } else if (running && info && info.reversed && (p.type === 'led' || p.type === 'diode')) {
           badge.textContent = p.type === 'led' ? '接反啦 🙃' : '接反啦';
           badge.className = 'part-badge show bad';
         } else if (running && p.type === 'led' && a > 0.004) {
@@ -414,6 +436,28 @@
       }
     });
     renderWires();
+  }
+  /* 过热 / 烧坏时的即时外观（通电时每 0.12 秒刷新一次，不重画电线） */
+  function updateHeat() {
+    App.state.parts.forEach(function (p) {
+      var node = partEls[p.id]; if (!node) return;
+      var burnt = !!(App.state.burnt && App.state.burnt[p.id]);
+      var heat = (App.state.heat && App.state.heat[p.id]) || 0;
+      node.style.setProperty('--heat', Math.min(1, heat).toFixed(2));
+      node.classList.toggle('is-burnt', burnt);
+      node.classList.toggle('is-hot', !burnt && heat > 0.02);
+      var badge = node.querySelector('.part-badge');
+      if (!badge) return;
+      if (burnt) {
+        badge.textContent = '烧坏啦 💨';
+        badge.className = 'part-badge show burnt';
+      } else if (heat > 0.15) {
+        badge.textContent = '好烫！♨️';
+        badge.className = 'part-badge show hot';
+      } else if (/burnt|hot/.test(badge.className)) {
+        badge.className = 'part-badge';
+      }
+    });
   }
 
   /* ---------- 动画：电线里的小电流点 ---------- */
@@ -450,7 +494,15 @@
       var lp = fault.partId && App.byId(fault.partId);
       return lp ? '「' + PARTS[lp.type].name + '」有个接线点没接电线' : '有接线点还没接电线';
     }
-    if (fault.code === 'no-resistor') return 'LED 电流太大，加个电阻吧';
+    if (fault.code === 'overload') {
+      var op = fault.partId && App.byId(fault.partId);
+      var opName = op ? (PARTS[op.type].short || PARTS[op.type].name) : '零件';
+      return '⚠️ ' + opName + '过载 ' + App.specValueText(fault) + '（额定 ' + App.specLimitText(fault) + '）';
+    }
+    if (fault.code === 'burnt') {
+      var bp = fault.partId && App.byId(fault.partId);
+      return '💨 ' + (bp ? (PARTS[bp.type].short || PARTS[bp.type].name) : '零件') + '烧坏了';
+    }
     if (fault.code === 'open') return '电路还没连成一个圈';
     if (fault.code === 'ok') return running ? '⚡ 电流正在跑' : '电路连好啦，可以通电';
     return running ? '⚡ 电流正在跑' : '点右上角「通电试试」';
@@ -486,7 +538,13 @@
         return '<b>「' + PARTS[lp.type].name + '」的' + termName + '还没接电线。</b>点这个小圆点，再点另一个小圆点，把它连起来。';
       }
     }
-    if (fault.code === 'no-resistor') return '<b>LED 电流太大啦！</b>它需要串一个电阻来保护，不然会烧坏。';
+    if (fault.code === 'overload') {
+      return (st.running ? '<b>危险，快断电！</b>' : '') + fault.message +
+        (st.running ? ' 再不停下来，它马上就要烧坏了！' : ' 通电就会烧坏，先改一改吧。');
+    }
+    if (fault.code === 'burnt') {
+      return '<b>' + fault.message + '</b>';
+    }
     if (fault.code === 'open') return '电路还没连成一个圈。检查一下：每个小圆点是不是都接上电线啦？';
     if (fault.code === 'ok') {
       if (!st.running) return '电路连好啦！按右上角「通电试试」吧。' + (st.presetNote ? ' ' + st.presetNote : '');
@@ -564,7 +622,8 @@
     el.meterBar.style.width = pct + '%';
     el.meterNote.textContent = st.running
       ? (fault.code === 'ok' ? '电流像小火车一样在跑！' : statusTextFor(fault, st.running))
-      : (fault.code === 'short' ? '短路很危险，断电检查一下吧' : '还没通电，电流在睡觉');
+      : (fault.code === 'short' ? '短路很危险，断电检查一下吧'
+        : (fault.code === 'burnt' ? '零件烧坏了，点它换一个新的' : '还没通电，电流在睡觉'));
     renderTasks();
     renderInspector();
     autoProblemVoice(fault, sim);
@@ -602,6 +661,7 @@
         '<p class="inspect-desc">把两个零件连起来，电流才能通过。</p>' +
         '<p class="inspect-more">' + descFor('wire') + '</p>' +
         '<div class="readout">' + (info ? '<span>电流 <b>' + App.formatCurrent(info.current) + '</b></span>' : '') + '</div>' +
+        '<p class="spec-line">📏 载流约 1A，电阻很小</p>' +
         '<div class="inspect-actions">' +
         '<button class="btn small" id="insSay">🔊 听讲解</button>' +
         '<button class="btn small danger" id="insDel">🗑️ 删掉这根电线</button></div>';
@@ -619,6 +679,14 @@
       html += '<div class="readout"><span>电流 <b>' + App.formatCurrent(info2.current) + '</b></span>' +
         '<span>电压 <b>' + Math.abs(info2.vdrop).toFixed(2) + ' V</b></span>' +
         '<span>功率 <b>' + (info2.power * 1000).toFixed(0) + ' mW</b></span></div>';
+    }
+    var specTxt = global.specTextOf ? specTextOf(part) : '';
+    if (specTxt) html += '<p class="spec-line">📏 ' + specTxt + '</p>';
+    var burntInfo = App.state.burnt[part.id];
+    if (burntInfo) {
+      html += '<p class="burn-line">💨 已经烧坏了：' + (burntInfo.kind === 'power' ? '功率' : '电流') +
+        '到了 ' + (burntInfo.valueText || '') + '，超过额定的 ' + (burntInfo.limitText || '') +
+        '。换一个新的才能继续工作。</p>';
     }
     if (part.type === 'battery') {
       html += '<div class="opt-row">' + [3, 4.5, 9].map(function (v) {
@@ -639,11 +707,14 @@
       html += '<div class="readout"><span>红色 + 轨左右相通</span><span>蓝色 − 轨左右相通</span></div>';
     }
     html += '<div class="inspect-actions">' +
+      (burntInfo ? '<button class="btn small good" id="insRepair">🔧 换一个新的</button>' : '') +
       '<button class="btn small" id="insSay">🔊 听讲解</button>' +
       '<button class="btn small danger" id="insDel">🗑️ 删掉这个零件</button></div>';
     body.innerHTML = html;
     on($('insDel'), 'click', function () { App.deleteSelection(); });
     on($('insSay'), 'click', function () { explainPart(part); });
+    var rp = $('insRepair');
+    if (rp) on(rp, 'click', function () { App.repairPart(part.id); });
     var sw = $('swToggle');
     if (sw) on(sw, 'click', function () { toggleSwitch(part); });
     Array.prototype.forEach.call(body.querySelectorAll('[data-voltage]'), function (b) {
@@ -802,8 +873,9 @@
       '<div class="help-item" data-speak="第三步，通电。按右上角通电试试，电线里会出现流动的小电流，LED、灯泡、电机、喇叭都会工作。"><span class="n">3</span><p><b>通电：</b>按右上角<b>「通电试试」</b>，电线里会出现流动的小电流，LED、灯泡、电机、喇叭都会工作。</p></div>' +
       '<div class="help-item" data-speak="第四步，修改和删除。拖动零件可以搬家。选中零件后点垃圾桶删除。点一下电线，中间会出现叉叉，再点它就可以删掉这根电线。按撤销都能找回。"><span class="n">4</span><p><b>修改和删除：</b>拖动零件可以搬家；选中零件后点 🗑️ 删除；点一下<b>电线</b>，中间会出现 <b>✕</b>，再点它就可以删掉这根电线；按「撤销」都能找回。</p></div>' +
       '<div class="help-item" data-speak="第五步，小心短路。电线不能直接把电池的正极和负极连起来。要在中间放一个灯泡、电阻、电机或者喇叭，不然会爆炸。"><span class="n">5</span><p><b>小心短路：</b>电线不能直接把电池的 + 和 − 连起来！要在中间放一个灯泡、电阻、电机或喇叭，不然会💥爆炸。</p></div>' +
-      '<div class="help-item" data-speak="第六步，认一认零件。电池提供电，电阻像减速带，LED 长脚接正极，二极管是单向门，面包板的正极轨和负极轨左右相通。"><span class="n">6</span><p><b>认一认：</b>电池提供电；电阻像减速带；LED 长脚接 +；二极管是单向门；面包板的 + 轨和 − 轨左右相通。</p></div>' +
-      '<div class="help-item" data-speak="第七步，听中文讲解。点任何一个零件，都会用中文告诉你它是干什么的。右边的小电会提示哪里有问题，点听问题按钮可以再听一遍。"><span class="n">7</span><p><b>听中文讲解：</b>点任何一个零件，都会用中文告诉你它是干什么的。右边的小电会提示哪里有问题，点「听问题」可以再听一遍。顶部的「朗读」按钮可以开关全站发音。</p></div>' +
+      '<div class="help-item" data-speak="第六步，真实电路里，每个零件都有额定值。LED 额定 20 毫安，电阻额定四分之一瓦，二极管额定 200 毫安。电流超过额定值，零件就会发烫冒烟，然后烧坏。烧坏以后，点它，再点换一个新的，就能继续玩。"><span class="n">6</span><p><b>零件会烧坏：</b>每个零件都有<b>额定值</b>：LED 20mA、电阻 1/4W、二极管 200mA……电流超了就会♨️发烫，然后💨烧坏。烧坏了点它，再点<b>「🔧 换一个新的」</b>，或者按撤销。</p></div>' +
+      '<div class="help-item" data-speak="第七步，认一认零件。电池提供电，电阻像减速带，LED 长脚接正极，二极管是单向门，面包板的正极轨和负极轨左右相通。"><span class="n">7</span><p><b>认一认：</b>电池提供电；电阻像减速带；LED 长脚接 +；二极管是单向门；面包板的 + 轨和 − 轨左右相通。</p></div>' +
+      '<div class="help-item" data-speak="第八步，听中文讲解。点任何一个零件，都会用中文告诉你它是干什么的。右边的小电会提示哪里有问题，点听问题按钮可以再听一遍。"><span class="n">8</span><p><b>听中文讲解：</b>点任何一个零件，都会用中文告诉你它是干什么的。右边的小电会提示哪里有问题，点「听问题」可以再听一遍。顶部的「朗读」按钮可以开关全站发音。</p></div>' +
       '</div>',
       '怎么玩？这里是给小朋友和大朋友的操作说明。点每一行，我都可以念给你听。'
     );
@@ -841,7 +913,7 @@
   global.UI = {
     init: init, el: el,
     renderAll: renderAll, renderParts: renderParts, renderWires: renderWires,
-    refreshFromSim: refreshFromSim, select: select,
+    refreshFromSim: refreshFromSim, updateHeat: updateHeat, select: select,
     updatePanels: updatePanels, renderTasks: renderTasks, renderInspector: renderInspector,
     updateRunButton: updateRunButton, setPowered: setPowered, setAlarm: setAlarm,
     updateSound: updateSound, updateVoice: updateVoice, updateUndo: updateUndo,

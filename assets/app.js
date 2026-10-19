@@ -13,6 +13,7 @@
     past: [], future: [], achieved: [],
     zoom: 1, fitScale: 1, scale: 1,
     sound: true, wireStart: null, shortTimer: null,
+    burnt: {}, heat: {}, heatTimer: null, heatAt: 0,
     presetNote: '', firstRun: true
   };
 
@@ -67,12 +68,14 @@
 
   /* ---------- 历史记录 / 本地保存 ---------- */
   function snapshot() {
-    return JSON.stringify({ parts: state.parts, wires: state.wires, nextId: state.nextId, achieved: state.achieved });
+    return JSON.stringify({ parts: state.parts, wires: state.wires, nextId: state.nextId, achieved: state.achieved, burnt: state.burnt });
   }
   function restore(json) {
     var d = JSON.parse(json);
     state.parts = d.parts || []; state.wires = d.wires || [];
     state.nextId = d.nextId || 1; state.achieved = d.achieved || [];
+    state.burnt = d.burnt || {};
+    state.heat = {};
     state.selection = null;
   }
   function pushHistory() {
@@ -141,6 +144,8 @@
     if (sel.kind === 'part') {
       state.wires = state.wires.filter(function (w) { return w.a.part !== sel.id && w.b.part !== sel.id; });
       state.parts = state.parts.filter(function (p) { return p.id !== sel.id; });
+      delete state.burnt[sel.id];
+      delete state.heat[sel.id];
     } else {
       state.wires = state.wires.filter(function (w) { return w.id !== sel.id; });
     }
@@ -158,7 +163,7 @@
     pushHistory();
     if (state.running) stopRun();
     state.parts = []; state.wires = []; state.selection = null;
-    state.achieved = [];
+    state.achieved = []; state.burnt = {}; state.heat = {};
     afterChange();
     UI.toast('清空啦，按「撤销」可以找回来');
     UI.speak('工作台清空啦。按撤销可以找回来。');
@@ -171,12 +176,120 @@
     commit();
   }
 
+  /* ---------- 额定值 / 过热 ---------- */
+  /* 每个零件的额定值（在 parts.js 的 spec 里声明）：电流或者功率，超了就会发烫 */
+  function stressOf(part, info) {
+    var spec = PARTS[part.type] && PARTS[part.type].spec;
+    if (!spec || !info) return null;
+    var list = [];
+    if (spec.maxA) {
+      var a = Math.abs(info.current);
+      if (a > 0.0002) list.push({ kind: 'current', value: a, limit: spec.maxA, ratio: a / spec.maxA });
+    }
+    if (spec.maxW) {
+      var w = Math.abs(info.power);
+      if (w > 0.0002) list.push({ kind: 'power', value: w, limit: spec.maxW, ratio: w / spec.maxW });
+    }
+    if (!list.length) return null;
+    list.sort(function (x, y) { return y.ratio - x.ratio; });
+    return list[0];
+  }
+  function specLimitText(st) {
+    return st.kind === 'power'
+      ? (st.limit >= 1 ? st.limit + ' W' : Math.round(st.limit * 1000) + ' mW')
+      : formatCurrent(st.limit);
+  }
+  function specValueText(st) {
+    return st.kind === 'power'
+      ? (st.value >= 1 ? st.value.toFixed(2) + ' W' : Math.round(st.value * 1000) + ' mW')
+      : formatCurrent(st.value);
+  }
+  /* 找出当前电路里最「吃力」的零件 */
+  function worstStress() {
+    var sim = state.sim; if (!sim) return null;
+    var best = null;
+    state.parts.forEach(function (p) {
+      if (state.burnt[p.id]) return;
+      var st = stressOf(p, sim.parts[p.id]);
+      if (st && (!best || st.ratio > best.st.ratio)) best = { part: p, st: st };
+    });
+    return best;
+  }
+  function burnSpeech(part, st) {
+    var name = (PARTS[part.type] && PARTS[part.type].short) || '零件';
+    return '哎呀，' + name + '烧坏啦！' +
+      (st.kind === 'power'
+        ? '它要消耗 ' + specValueText(st) + '，超过了 ' + specLimitText(st) + ' 的额定功率。'
+        : '里面流过了 ' + specValueText(st) + '，超过了 ' + specLimitText(st) + ' 的额定电流。') +
+      '点它，再点「换一个新的」；或者按撤销。';
+  }
+  function burn(part, st) {
+    if (state.burnt[part.id]) return;
+    pushHistory();
+    state.burnt[part.id] = {
+      kind: st.kind, value: st.value, limit: st.limit,
+      limitText: specLimitText(st), valueText: specValueText(st),
+      at: Date.now()
+    };
+    state.heat[part.id] = 1;
+    audio.fizzle();
+    UI.toast('💨 ' + ((PARTS[part.type] && PARTS[part.type].short) || '零件') + '烧坏啦！', 'bad');
+    UI.speak(burnSpeech(part, st));
+    evaluate();
+    commit();       /* 把「烧坏了」记下来，刷新页面也还在 */
+  }
+  function repairPart(id) {
+    if (!state.burnt[id]) return;
+    var part = byId(id);
+    pushHistory();
+    delete state.burnt[id];
+    state.heat[id] = 0;
+    audio.click();
+    afterChange();
+    UI.speak('换好啦，崭新的' + ((part && PARTS[part.type] && PARTS[part.type].short) || '零件') + '。再通电试试吧。');
+    UI.toast('🔧 换好啦！', 'good');
+  }
+  /* 一边通电一边看谁在发烫：撑过 0.7 秒才烧坏，超 3 倍立刻烧坏 */
+  function thermalTick() {
+    if (!state.running || state.exploding) return;
+    var sim = state.sim; if (!sim || sim.short) return;   /* 短路交给爆炸 */
+    var now = Date.now();
+    var dt = Math.min(250, now - (state.heatAt || now));
+    state.heatAt = now;
+    state.parts.forEach(function (p) {
+      if (state.burnt[p.id]) return;
+      var st = stressOf(p, sim.parts[p.id]);
+      if (!st || st.ratio <= 1) {
+        state.heat[p.id] = Math.max(0, (state.heat[p.id] || 0) - dt / 900);
+        return;
+      }
+      if (st.ratio >= 3) { burn(p, st); return; }
+      var h = (state.heat[p.id] || 0) + (dt / 700) * Math.min(2, st.ratio);
+      state.heat[p.id] = h;
+      if (h >= 1) burn(p, st);
+    });
+    UI.updateHeat();
+  }
+  function startHeatTimer() {
+    stopHeatTimer();
+    state.heatAt = Date.now();
+    state.heatTimer = setInterval(thermalTick, 120);
+  }
+  function stopHeatTimer() {
+    if (state.heatTimer) { clearInterval(state.heatTimer); state.heatTimer = null; }
+  }
+
   /* ---------- 运行 / 停止 ---------- */
   function setRunUI(on) {
     state.running = on;
     UI.updateRunButton();
     UI.setPowered(on);
-    if (!on) { audio.stopAll(); UI.setAlarm(false); }
+    if (on) startHeatTimer();
+    else {
+      stopHeatTimer();
+      audio.stopAll();
+      UI.setAlarm(false);
+    }
   }
   function startRun() {
     if (state.exploding) return;
@@ -193,7 +306,9 @@
   function stopRun() {
     if (state.shortTimer) { clearTimeout(state.shortTimer); state.shortTimer = null; }
     setRunUI(false);
+    state.heat = {};
     UI.refreshFromSim();
+    UI.updateHeat();
     UI.updatePanels();
     UI.speak('断电啦。');
   }
@@ -214,12 +329,41 @@
       return (w.a.part === partId && w.a.term === termId) || (w.b.part === partId && w.b.term === termId);
     }).length;
   }
+  function overloadFault(part, st) {
+    var name = (PARTS[part.type] && PARTS[part.type].short) || '零件';
+    var msg;
+    if (st.kind === 'power') {
+      msg = name + '要消耗 ' + specValueText(st) + '，超过额定的 ' + specLimitText(st) +
+        '，它会发烫、冒烟，然后烧坏。换一个阻值更大的电阻，或者把电池电压降下来。';
+    } else if (part.type === 'led') {
+      msg = 'LED 里有 ' + specValueText(st) + '，超过额定的 ' + specLimitText(st) +
+        '，很快会烧坏。要串一个 100Ω 以上的电阻保护它；已经有了的话，换一个更大的电阻。';
+    } else if (part.type === 'diode') {
+      msg = '二极管里有 ' + specValueText(st) + '，超过额定的 ' + specLimitText(st) +
+        '。二极管不是用电器，电流太大它会烧坏，要在它旁边串一个灯泡、电阻、LED 或者电机。';
+    } else {
+      msg = name + '里有 ' + specValueText(st) + '，超过额定的 ' + specLimitText(st) +
+        '，会越来越烫，然后烧坏。是不是电池电压太高啦？';
+    }
+    return { code: 'overload', partId: part.id, kind: st.kind, value: st.value, limit: st.limit, message: msg };
+  }
   function diagnose(sim) {
     var hasBattery = state.parts.some(function (p) { return p.type === 'battery'; });
     if (!hasBattery) {
       return {
         code: 'no-battery',
         message: '还没有电池。先放一节电池吧，它是电流小火车的发动机。'
+      };
+    }
+    var burntPart = state.parts.find(function (p) { return state.burnt[p.id]; });
+    if (burntPart) {
+      var bd = state.burnt[burntPart.id] || {};
+      var bname = (PARTS[burntPart.type] && PARTS[burntPart.type].short) || '零件';
+      return {
+        code: 'burnt', partId: burntPart.id,
+        message: '「' + bname + '」烧坏啦！它' + (bd.kind === 'power' ? '要消耗 ' : '里面流过了 ') +
+          (bd.valueText || '太大') + '，超过了额定的 ' + (bd.limitText || '额定值') +
+          '，所以烧断了。点它一下，再点「🔧 换一个新的」；或者按撤销。'
       };
     }
     if (sim && sim.short) {
@@ -255,16 +399,8 @@
       return out;
     }
     if (sim && sim.totalCurrent > 0.0006) {
-      var hotLed = state.parts.find(function (p) {
-        var info = sim.parts[p.id];
-        return p.type === 'led' && info && info.current > 0.035 && !info.reversed;
-      });
-      if (hotLed) {
-        return {
-          code: 'no-resistor', partId: hotLed.id,
-          message: 'LED 的电流太大了！它没有电阻保护，很容易烧坏。请串一个电阻再通电。'
-        };
-      }
+      var worst = worstStress();
+      if (worst && worst.st.ratio > 1) return overloadFault(worst.part, worst.st);
       return { code: 'ok' };
     }
     var i, p;
@@ -314,7 +450,7 @@
     if (state.exploding) return;
     var sim = CircuitSim.simulate({
       parts: state.parts, wires: state.wires,
-      defOf: defOf, diodeState: state.diodeState
+      defOf: defOf, diodeState: state.diodeState, burnt: state.burnt
     });
     state.diodeState = sim.diodeState;
     state.sim = sim;
@@ -344,6 +480,7 @@
   function explode(sim) {
     state.exploding = true;
     setRunUI(false);
+    state.heat = {};
     UI.setAlarm(true);
     UI.refreshFromSim();       /* 爆炸期间也让电池 / 惹祸的零件保持红色提示 */
     audio.boom();
@@ -439,6 +576,23 @@
         og.gain.setValueAtTime(0.4, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
         o.connect(og); og.connect(ctx.destination); o.start(t); o.stop(t + 0.65);
       },
+      /* 零件烧坏的声音：一声「嘶——啪」 */
+      fizzle: function () {
+        if (!can()) return;
+        var t = ctx.currentTime, i;
+        var buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.42), ctx.sampleRate), d = buf.getChannelData(0);
+        for (i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 1.4);
+        var src = ctx.createBufferSource(); src.buffer = buf;
+        var f = ctx.createBiquadFilter(); f.type = 'bandpass';
+        f.frequency.setValueAtTime(1500, t); f.frequency.exponentialRampToValueAtTime(320, t + 0.4);
+        f.Q.value = 0.9;
+        var g = ctx.createGain(); g.gain.setValueAtTime(0.26, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.42);
+        src.connect(f); f.connect(g); g.connect(ctx.destination); src.start(t);
+        var o = ctx.createOscillator(), og = ctx.createGain();
+        o.type = 'square'; o.frequency.setValueAtTime(240, t); o.frequency.exponentialRampToValueAtTime(58, t + 0.25);
+        og.gain.setValueAtTime(0.1, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+        o.connect(og); og.connect(ctx.destination); o.start(t); o.stop(t + 0.32);
+      },
       update: function (sim) {
         if (!state.sound) { stopAll(); return; }
         var buzz = null, motor = null;
@@ -507,6 +661,7 @@
     pushHistory();
     state.parts = []; state.wires = []; state.nextId = 1;
     state.selection = null; state.achieved = []; state.diodeState = {};
+    state.burnt = {}; state.heat = {};
     state.wires = preset.build();
     normalizeIds();
     state.presetNote = preset.note;
@@ -533,6 +688,7 @@
         if (d && d.parts && d.parts.length) {
           state.parts = d.parts; state.wires = d.wires || [];
           state.nextId = d.nextId || 1; state.achieved = d.achieved || [];
+          state.burnt = d.burnt || {};
           normalizeIds();
           loaded = true;
         }
@@ -566,7 +722,9 @@
     afterChange: afterChange, evaluate: evaluate, diagnose: diagnose, termLabel: termLabel,
     startRun: startRun, stopRun: stopRun, toggleRun: toggleRun, setRunUI: setRunUI,
     loadPreset: loadPreset, audio: audio, init: init,
-    duplicateProps: duplicateProps
+    duplicateProps: duplicateProps,
+    repairPart: repairPart, stressOf: stressOf, worstStress: worstStress,
+    specLimitText: specLimitText, specValueText: specValueText
   };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

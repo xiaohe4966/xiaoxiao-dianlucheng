@@ -16,6 +16,19 @@
   （Velxio 自己的 `frontend/public/component-svgs/fritzing/ATTRIBUTION.md` 也是这么标注的。）
 - 电池、二极管、电机、喇叭、灯泡、开关的图形参考 Velxio 的元件画法与配色，由本项目重绘/改写。
 
+## 电气参数与「真实电路」行为
+
+零件上的真实参数（额定值、正向压降、内阻、过载烧坏等）是**我们按公开资料整理并用自己写的求解器实现的**，
+参考资料包括：
+
+- [Velxio](https://github.com/davidmonterocrespo24/velxio)（AGPL-3.0）的元件元数据与额定值清单
+  （`frontend/public/components-metadata.json`、`frontend/src/simulation/verify/componentRatings.ts`、`componentToSpice.ts`），
+  用来确定常见数值，例如 LED 额定 20mA、电阻 1/4W、电池内阻 0.15～1.5Ω、LED 按颜色区分正向电压等；
+- 常见器件手册的公开数据（如 1N4148 正向压降约 0.7V、额定 200mA；5mm LED 正向电压 1.8～3.0V）。
+
+本项目**没有**使用 Velxio 的 ngspice/WASM 仿真内核，也没有复制其源代码：求解器、烧坏逻辑、中文讲解都是自己实现的，
+只借用了上面这些公开的元件数值作为「真实感」的参考。
+
 我们对图形做过的修改：
 
 - 把图形按我们的零件尺寸缩放，并把端子引线接到我们的接线点（LED 加了两条拐弯引脚）；
