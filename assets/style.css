@@ -131,6 +131,8 @@ button{font:inherit}
 .board-canvas::-webkit-scrollbar-thumb{background:#ded2ba;border-radius:99px;border:2px solid #fbf7ee}
 .wire-layer{position:absolute;left:0;top:0;width:1200px;height:760px;pointer-events:none}
 .parts-layer,.effects-layer{position:absolute;left:0;top:0;width:1200px;height:760px}
+/* 零件层本身不挡鼠标，只有零件本体可点，这样下面的电线才点得到 */
+.parts-layer{pointer-events:none}
 .effects-layer{pointer-events:none;overflow:visible}
 
 /* 通电 / 警报状态 */
@@ -169,7 +171,7 @@ button{font:inherit}
 @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-9px)}}
 
 /* ---------- 零件通用 ---------- */
-.part{position:absolute;cursor:grab;touch-action:none;user-select:none}
+.part{position:absolute;cursor:grab;touch-action:none;user-select:none;pointer-events:auto}
 .part.dragging{cursor:grabbing;z-index:20}
 .part-body{position:absolute;inset:0;border-radius:18px}
 .part-body:active{cursor:grabbing}

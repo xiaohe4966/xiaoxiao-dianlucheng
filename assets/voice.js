@@ -92,9 +92,15 @@
 
   function cancel() {
     state.speaking = false;
-    if (synth) { try { synth.cancel(); } catch (e) {} }
+    if (synth) {
+      try { synth.cancel(); } catch (e) {}
+      /* Chrome 偶尔会卡在暂停状态，叫它继续一下 */
+      try { if (synth.paused) synth.resume(); } catch (e) {}
+    }
     emit();
   }
+
+  var token = 0;
 
   function speak(text, opts) {
     opts = opts || {};
@@ -114,25 +120,44 @@
     state.lastAt = now;
 
     var interrupt = opts.auto ? false : (opts.interrupt !== false);
+    var busy = !!(synth && (synth.speaking || synth.pending));
     if (interrupt) cancel();
 
-    try {
-      var u = new global.SpeechSynthesisUtterance(t);
-      u.lang = 'zh-CN';
-      if (state.voice) u.voice = state.voice;
-      u.rate = opts.rate || 0.98;
-      u.pitch = opts.pitch || 1.05;
-      u.volume = 1;
-      u.onstart = function () { state.speaking = true; emit(); };
-      u.onend = function () { state.speaking = false; emit(); };
-      u.onerror = function () { state.speaking = false; emit(); };
-      synth.speak(u);
-      return true;
-    } catch (e) {
-      state.speaking = false;
-      emit();
-      return false;
+    var u = new global.SpeechSynthesisUtterance(t);
+    u.lang = 'zh-CN';
+    if (state.voice) u.voice = state.voice;
+    u.rate = opts.rate || 0.98;
+    u.pitch = opts.pitch || 1.05;
+    u.volume = 1;
+
+    var my = ++token;
+    var started = false;
+    u.onstart = function () { started = true; state.speaking = true; emit(); };
+    u.onend = function () { if (my !== token) return; state.speaking = false; emit(); };
+    u.onerror = function () { if (my !== token) return; state.speaking = false; emit(); };
+
+    function fire() {
+      if (my !== token || !state.enabled || !supported()) return false;
+      try { synth.speak(u); return true; } catch (e) { return false; }
     }
+
+    /* 刚 cancel 过时立刻 speak 会被有些浏览器吞掉，稍等一下再念 */
+    if (interrupt && busy) setTimeout(fire, 120);
+    else fire();
+
+    /* 兜底：过一小会儿还没开始，多半是这句被浏览器吞了，重念一次。
+       只对「用户主动点出来」的朗读重试；只要引擎说自己还在忙，就交给下一次点击去恢复。 */
+    if (interrupt) {
+      setTimeout(function () {
+        if (my !== token || started || !state.enabled) return;
+        if (synth.speaking || synth.pending) return;
+        try { synth.cancel(); } catch (e) {}
+        try { if (synth.paused) synth.resume(); } catch (e) {}
+        setTimeout(fire, 120);
+      }, 900);
+    }
+
+    return true;
   }
 
   function setEnabled(on) {

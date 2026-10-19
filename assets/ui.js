@@ -9,6 +9,7 @@
   var lastProblemCode = '';
   var explainTimer = null;
   var autoProblemTimer = null;
+  var wireHintShown = false;
 
   function $(id) { return document.getElementById(id); }
   function on(node, ev, fn) { if (node) node.addEventListener(ev, fn); }
@@ -170,6 +171,11 @@
         var extra2 = wi && App.state.running && Math.abs(wi.current) > 0.0008
           ? '这根电线里现在有' + App.formatCurrent(wi.current) + '的电流。' : '';
         speak('电线。' + (t ? t.what + ' ' + t.how + ' ' + t.tip : '') + ' ' + extra2);
+        /* 第一次点电线时，告诉小朋友怎么删掉它 */
+        if (!wireHintShown) {
+          wireHintShown = true;
+          UI.toast('点电线中间的 ✕ 就能删掉它，也可以按 Delete 键', 'good', { silent: true });
+        }
       }
     });
     on(el.stage, 'pointerdown', function (e) {
@@ -214,7 +220,7 @@
         e.stopPropagation();
         App.audio.click();
         explainType(type);
-        UI.toast(label + '：' + (guideOf(type) ? guideOf(type).what : ''), 'good');
+        UI.toast(label + '：' + (guideOf(type) ? guideOf(type).what : ''), 'good', { silent: true });
       });
 
       wrap.appendChild(chip);
@@ -320,7 +326,9 @@
       try { mid = path.getPointAtLength(len / 2); } catch (e) {}
       var xg = document.createElementNS('http://www.w3.org/2000/svg', 'g');
       xg.setAttribute('class', 'wire-x');
-      xg.setAttribute('transform', 'translate(' + r1(mid.x) + ' ' + r1(mid.y) + ')');
+      /* 缩小看全图时，把 ✕ 放大一点，保证在屏幕上是差不多大的 */
+      var xk = Math.max(1, Math.min(3, 1 / (App.state.scale || 1)));
+      xg.setAttribute('transform', 'translate(' + r1(mid.x) + ' ' + r1(mid.y) + ') scale(' + xk.toFixed(2) + ')');
       var xc = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
       xc.setAttribute('r', '23');
       var xt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -705,6 +713,8 @@
     el.stage.style.transform = 'scale(' + s + ')';
     el.stageHolder.style.width = (App.STAGE_W * s) + 'px';
     el.stageHolder.style.height = (App.STAGE_H * s) + 'px';
+    /* 缩放变化时，选中的电线要重画，✕ 才能保持合适大小 */
+    if (App.state.selection && App.state.selection.kind === 'wire') renderWires();
   }
 
   /* ---------- 爆炸特效 ---------- */
@@ -793,12 +803,13 @@
   }
 
   /* ---------- 提示气泡 ---------- */
-  function toast(msg, type) {
+  function toast(msg, type, opts) {
     var t = document.createElement('div');
     t.className = 'toast' + (type ? ' ' + type : '');
     t.textContent = msg;
     el.toastRoot.appendChild(t);
-    speak(msg, { auto: true });
+    /* silent：这条提示已经有别的语音在讲了，就不要再念一遍 */
+    if (!(opts && opts.silent)) speak(msg, { auto: true });
     setTimeout(function () { t.classList.add('out'); }, 2200);
     setTimeout(function () { t.remove(); }, 2550);
   }
