@@ -141,7 +141,7 @@
     diode: {
       name: '二极管', short: '二极管', w: 134, h: 74,
       terms: [{ id: 'an', x: 12, y: 42, label: '+', tone: 'pos' }, { id: 'ca', x: 122, y: 42 }],
-      model: function () { return { kind: 'diode', a: 'an', b: 'ca', rf: 8, rr: 1e9 }; },
+      model: function () { return { kind: 'diode', a: 'an', b: 'ca', rf: 0.5, rr: 1e9 }; },
       art: function () {
         return svg(134, 74,
           '<line x1="12" y1="42" x2="46" y2="42" stroke="#b8c2cc" stroke-width="5" stroke-linecap="round"/>' +
@@ -254,7 +254,7 @@
     diode: {
       what: '二极管是电流的单向门。它只让电流从三角形尖尖的方向过去。',
       how: '有 + 的一头接电流来的方向，另一头接电流要去的方向。',
-      tip: '接反了电流就过不去，整个电路都不工作。'
+      tip: '接反了电流就过不去，整个电路都不工作。二极管不是用电器：直接把它接在电池两头等于短路，它会发烫烧坏。'
     },
     motor: {
       what: '电动机里面有线圈。电流通过时会产生磁力，让电机转起来。',

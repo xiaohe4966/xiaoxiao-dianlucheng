@@ -143,7 +143,11 @@
 
       var x = solveLinear(A, b);
 
-      /* 3. 根据电压更新二极管通断状态 */
+      /* 3. 更新二极管通断状态：
+       *   已导通的：只要电流还朝正方向走就继续导通
+       *             （用电流判断，别用压降：正向电阻小的二极管压降很小，会来回跳变）
+       *   已断开的：两端电压超过门槛就导通
+       */
       var changed = false;
       parts.forEach(function (p) {
         partEdges(p, defOf(p)).forEach(function (e) {
@@ -151,8 +155,16 @@
           var dk = p.id + ':' + e.a + '-' + e.b;
           var a = node(tkey(p.id, e.a)), c = node(tkey(p.id, e.b));
           var vd = x[a] - x[c];
-          var shouldOn = vd > 0.02;
-          if (!!diodeOn[dk] !== shouldOn) { diodeOn[dk] = shouldOn; changed = true; }
+          var on = !!diodeOn[dk];
+          var shouldOn;
+          if (on) {
+            var rf = Math.max(e.rf || 10, 1e-4);
+            var I = vd / rf;
+            shouldOn = I > -1e-6;      /* 电流还是正着走就继续导通 */
+          } else {
+            shouldOn = vd > 0.02;      /* 开路电压够大就导通 */
+          }
+          if (on !== shouldOn) { diodeOn[dk] = shouldOn; changed = true; }
         });
       });
       if (!changed || it === 9) {

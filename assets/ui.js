@@ -288,7 +288,7 @@
       var info = sim && sim.wires[w.id];
       var cur = info ? info.current : 0;
       var active = running && Math.abs(cur) > 0.0008;
-      var hot = running && Math.abs(cur) > CircuitSim.SHORT_A;
+      var hot = (running || App.state.exploding) && Math.abs(cur) > CircuitSim.SHORT_A;
       var p1 = ends[0], p2 = ends[1], tmp;
       if (running && cur < -0.0008) { tmp = p1; p1 = p2; p2 = tmp; }
       var d = pathD(p1, p2);
@@ -388,7 +388,15 @@
       node.style.setProperty('--spin', spin.toFixed(2) + 's');
       node.classList.toggle('is-on', !!on);
       node.classList.toggle('is-rev', !!(info && info.reversed));
-      node.classList.toggle('is-short', !!(running && p.type === 'battery' && info && info.current > CircuitSim.SHORT_A));
+      var faultNow = App.state.lastFault;
+      var live = running || App.state.exploding;   /* 爆炸动画期间也要继续提示是谁短路 */
+      var battLoad = 0;
+      if (p.type === 'battery' && sim && sim.batteries) {
+        sim.batteries.forEach(function (b) { if (b.partId === p.id) battLoad = b.current; });
+      }
+      var battShort = !!(live && p.type === 'battery' && battLoad > CircuitSim.SHORT_A);
+      var culpritShort = !!(live && faultNow && faultNow.code === 'short' && faultNow.partId === p.id);
+      node.classList.toggle('is-short', battShort || culpritShort);
       var badge = node.querySelector('.part-badge');
       if (badge) {
         if (running && info && info.reversed && (p.type === 'led' || p.type === 'diode')) {
@@ -450,9 +458,22 @@
   function doctorFor(fault, sim) {
     var st = App.state;
     if (st.exploding) return '爆、爆炸啦！💥 快把直接连电池两头的电线拿掉，或者加一个灯泡、电阻、电机。';
-    if (fault.code === 'short') return st.running
-      ? '危险！电流抄近路，马上就要爆炸了！快断电！'
-      : '这个电路短路啦：电线直接连了电池两头。通电会💥！加一个灯泡、电阻、电机或喇叭吧。';
+    if (fault.code === 'short') {
+      var cp = fault.partId && App.byId(fault.partId);
+      if (cp && cp.type === 'diode') {
+        return st.running
+          ? '危险！二极管把电池两头抄近路啦，它马上就要发烫烧坏，快断电！'
+          : '<b>二极管不是用电器</b>，它只是一扇单向门，不消耗电。把它直接接在电池两头等于短路，通电会💥。要在电路里加一个灯泡、电阻、LED 或电机。';
+      }
+      if (cp && cp.type === 'switch') {
+        return st.running
+          ? '危险！开关把电池两头直接连起来啦，电流抄了近路，快断电！'
+          : '开关把电池两头直接连起来啦，中间没有用电器，等于短路。通电会💥，加一个灯泡、电阻、LED 或电机吧。';
+      }
+      return st.running
+        ? '危险！电流抄近路，马上就要爆炸了！快断电！'
+        : '这个电路短路啦：电线直接连了电池两头。通电会💥！加一个灯泡、电阻、电机或喇叭吧。';
+    }
     if (fault.code === 'no-battery') return '先放一节 <b>电池</b> 吧，它是电流小火车的发动机。';
     if (fault.code === 'open-switch') return '开关断开了，电流过不去。点一下开关，让它合上。';
     if (fault.code === 'reversed') return fault.type === 'led'
@@ -746,7 +767,10 @@
     html += '<div class="boom-label">💥 砰！短路啦！</div>';
     boom.innerHTML = html;
     el.effectsLayer.appendChild(boom);
-    speak('砰！短路啦！电线把电池的正极和负极直接连起来了。电流走了没有障碍的近路。');
+    var why = fault && fault.message
+      ? fault.message.replace(/^短路啦！/, '')
+      : '电线把电池的正极和负极直接连起来了，电流走了没有障碍的近路。';
+    speak('砰！短路啦！' + why);
     var canvas = el.boardCanvas;
     canvas.classList.add('shake');
     var batEl = el.partsLayer.querySelector('.part[data-type="battery"]');

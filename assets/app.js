@@ -229,10 +229,30 @@
         w = state.wires.find(function (q) { return q.id === wid; });
       }
       var bat = state.parts.find(function (p) { return p.type === 'battery'; });
-      return {
-        code: 'short', wireId: w ? w.id : null, partId: bat ? bat.id : null,
-        message: '短路啦！有一根电线直接把电池的正极和负极连起来了。快把中间的电线拿掉，或者在中间加一个灯泡、电阻、电机、喇叭。'
+      /* 找出近路上是谁：二极管和开关都不是用电器，没有它们才怪电线 */
+      var carries = function (type) {
+        for (var k = 0; k < state.parts.length; k++) {
+          var cp = state.parts[k];
+          if (cp.type !== type) continue;
+          var cinfo = sim.parts[cp.id];
+          if (cinfo && Math.abs(cinfo.current) > 0.5) return cp;
+        }
+        return null;
       };
+      var diodeInLoop = carries('diode');
+      var switchInLoop = carries('switch');
+      var culprit = diodeInLoop || switchInLoop;
+      var out = { code: 'short', wireId: w ? w.id : null, partId: culprit ? culprit.id : (bat ? bat.id : null) };
+      if (diodeInLoop) {
+        out.message = '短路啦！二极管不是用电器，它只是一扇单向门。把它直接接在电池两头，电流就抄近路跑回去了，二极管会发烫烧坏。要在它旁边加一个灯泡、电阻、LED 或者电机。';
+        return out;
+      }
+      if (switchInLoop) {
+        out.message = '短路啦！开关把电池两头直接连起来啦，中间没有用电器。要加一个灯泡、电阻、LED 或者电机才行。';
+        return out;
+      }
+      out.message = '短路啦！有一根电线直接把电池的正极和负极连起来了。快把中间的电线拿掉，或者在中间加一个灯泡、电阻、电机、喇叭。';
+      return out;
     }
     if (sim && sim.totalCurrent > 0.0006) {
       var hotLed = state.parts.find(function (p) {
@@ -325,6 +345,7 @@
     state.exploding = true;
     setRunUI(false);
     UI.setAlarm(true);
+    UI.refreshFromSim();       /* 爆炸期间也让电池 / 惹祸的零件保持红色提示 */
     audio.boom();
     UI.playBoom(sim, state.lastFault);
     UI.toast('砰！短路啦！电流走了没有障碍的近路', 'bad');
