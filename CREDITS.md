@@ -25,10 +25,12 @@
 
 ## 本项目许可证
 
-因为使用了 AGPL-3.0 的元件图形，**本项目整体按 [AGPL-3.0](LICENSE) 发布**。
+因为使用了 AGPL-3.0 的元件图形，**本项目整体按 [AGPL-3.0](LICENSE) 发布**（`LICENSE` 为标准 AGPL-3.0 全文）。
 
 - 自己在家玩、自己改、给孩子玩：完全没问题。
 - 如果要把这个网站放到网上给别人用，或分发修改版：需要按 AGPL-3.0 公开本项目源码，
   并保留上面的版权声明（包括 Fritzing 的 CC-BY-SA 署名）。
 - 不想开源的话，需要向 Velxio 作者购买商业授权：
   <https://github.com/davidmonterocrespo24/velxio/blob/master/COMMERCIAL_LICENSE.md>
+  （Velxio 仓库里的 LICENSE 附带了商业授权说明，原件留档在
+  [`assets/components/LICENSE-velxio.txt`](assets/components/LICENSE-velxio.txt)）
