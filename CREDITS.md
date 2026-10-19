@@ -15,6 +15,8 @@
   按 **CC-BY-SA 3.0** 许可使用：<https://creativecommons.org/licenses/by-sa/3.0/>
   （Velxio 自己的 `frontend/public/component-svgs/fritzing/ATTRIBUTION.md` 也是这么标注的。）
 - 电池、二极管、电机、喇叭、灯泡、开关的图形参考 Velxio 的元件画法与配色，由本项目重绘/改写。
+- 按钮、可变电阻、保险丝、电流表、电压表的图形是**本项目自己画的 SVG**（没有使用外部素材），
+  同样按本项目的 AGPL-3.0 发布。
 
 ## 电气参数与「真实电路」行为
 

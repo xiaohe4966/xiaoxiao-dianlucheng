@@ -77,8 +77,14 @@
     drag = {
       kind: 'part', id: part.id, el: partEl,
       dx: p.x - part.x, dy: p.y - part.y,
-      sx: e.clientX, sy: e.clientY, moved: false, history: false
+      sx: e.clientX, sy: e.clientY, moved: false, history: false,
+      pressed: false
     };
+    /* 按钮：一按下去就通电，松手才断开 */
+    if (part.type === 'button') {
+      UI.pressButton(part, true);
+      drag.pressed = true;
+    }
   }
 
   /* ---------- 连线 ---------- */
@@ -189,6 +195,8 @@
     }
     if (d.kind === 'part') {
       d.el.classList.remove('dragging');
+      var held = App.byId(d.id);
+      if (d.pressed && held) UI.pressButton(held, false);
       if (d.moved) {
         App.commit();
         if (App.state.running) App.evaluate();

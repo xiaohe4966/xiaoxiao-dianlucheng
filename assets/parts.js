@@ -79,6 +79,29 @@
       }
     },
 
+    /* 按钮：按住才通的开关（松手就断开） */
+    button: {
+      name: '按钮', short: '按钮', w: 140, h: 94,
+      terms: [{ id: 'a', x: 14, y: 62 }, { id: 'b', x: 126, y: 62 }],
+      model: function (p) { return { kind: 'resistor', a: 'a', b: 'b', r: p.props.pressed ? 0.02 : 1e12 }; },
+      spec: {
+        maxA: 1.5,
+        text: '按住才通电 · 额定 1.5A'
+      },
+      art: function () {
+        return svg(140, 94,
+          '<text x="70" y="16" text-anchor="middle" font-size="12.5" font-weight="800" fill="#6b7280">按钮 · 按住才通</text>' +
+          '<line x1="14" y1="62" x2="28" y2="62" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+          '<line x1="112" y1="62" x2="126" y2="62" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+          '<rect x="28" y="38" width="84" height="46" rx="12" fill="#e3e8ee" stroke="#1f2a3a" stroke-width="3"/>' +
+          '<circle cx="70" cy="58" r="15" fill="#cbd5e1" stroke="#1f2a3a" stroke-width="3"/>' +
+          '<g class="btn-cap">' +
+          '<circle cx="70" cy="56" r="14" fill="#ef4444" stroke="#1f2a3a" stroke-width="3"/>' +
+          '<circle cx="65" cy="51" r="4.5" fill="#ffffff" opacity=".55"/></g>' +
+          '<text x="70" y="91" text-anchor="middle" font-size="11.5" font-weight="800" fill="#7a6a52">按住才通电</text>');
+      }
+    },
+
     resistor: {
       name: '电阻', short: '电阻', w: 150, h: 58,
       terms: [{ id: 'a', x: 10, y: 30 }, { id: 'b', x: 140, y: 30 }],
@@ -91,6 +114,36 @@
         return svg(150, 58,
           '<text x="75" y="52" text-anchor="middle" font-size="11.5" font-weight="800" fill="#7a6a52">' + fmtR(p.props.resistance) + '</text>') +
           img('resistor.svg', 12, 18.2, 126, 23.5);
+      }
+    },
+
+    /* 可变电阻（电位器）：拖动滑块就能改变电阻大小 */
+    pot: {
+      name: '可变电阻', short: '可变电阻', w: 150, h: 104,
+      terms: [{ id: 'a', x: 10, y: 66 }, { id: 'b', x: 140, y: 66 }],
+      model: function (p) {
+        var v = Number(p.props.resistance);
+        if (!(v >= 0)) v = 500;
+        return { kind: 'resistor', a: 'a', b: 'b', r: Math.max(0, Math.min(1000, v)) };
+      },
+      spec: {
+        maxW: 0.25,
+        text: function (p) { return fmtR(p.props.resistance || 0) + '（可调 0～1kΩ）· 额定功率 1/4W'; }
+      },
+      art: function (p) {
+        return svg(150, 104,
+          '<text x="75" y="16" text-anchor="middle" font-size="12" font-weight="800" fill="#6b7280">可变电阻</text>' +
+          '<circle cx="75" cy="36" r="13" fill="#94a3b8" stroke="#1f2a3a" stroke-width="3"/>' +
+          '<line x1="75" y1="23" x2="75" y2="29" stroke="#1f2a3a" stroke-width="3"/>' +
+          '<line x1="75" y1="49" x2="75" y2="55" stroke="#1f2a3a" stroke-width="3"/>' +
+          '<polygon points="75,60 69,50 81,50" fill="#1f2a3a"/>' +
+          '<line x1="10" y1="66" x2="30" y2="66" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+          '<line x1="120" y1="66" x2="140" y2="66" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+          '<rect x="30" y="52" width="90" height="28" rx="9" fill="#f0dcc0" stroke="#1f2a3a" stroke-width="3"/>' +
+          '<line x1="50" y1="52" x2="50" y2="80" stroke="#d9bd93" stroke-width="2.5"/>' +
+          '<line x1="75" y1="52" x2="75" y2="80" stroke="#d9bd93" stroke-width="2.5"/>' +
+          '<line x1="100" y1="52" x2="100" y2="80" stroke="#d9bd93" stroke-width="2.5"/>' +
+          '<text x="75" y="98" text-anchor="middle" font-size="12" font-weight="900" fill="#7a6a52">' + fmtR(Number(p.props.resistance) || 0) + '</text>');
       }
     },
 
@@ -190,6 +243,28 @@
       }
     },
 
+    /* 保险丝：电流太大就自己熔断，保护电池和别的零件 */
+    fuse: {
+      name: '保险丝', short: '保险丝', w: 150, h: 76,
+      terms: [{ id: 'a', x: 10, y: 42 }, { id: 'b', x: 140, y: 42 }],
+      model: function () { return { kind: 'resistor', a: 'a', b: 'b', r: 0.05 }; },
+      spec: {
+        maxA: 0.5,
+        text: '额定 0.5A · 电流太大就熔断'
+      },
+      art: function () {
+        return svg(150, 76,
+          '<text x="75" y="15" text-anchor="middle" font-size="12" font-weight="800" fill="#6b7280">保险丝 · 0.5A</text>' +
+          '<line x1="10" y1="42" x2="24" y2="42" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+          '<line x1="126" y1="42" x2="140" y2="42" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+          '<rect x="24" y="24" width="102" height="36" rx="12" fill="#e0f2fe" stroke="#1f2a3a" stroke-width="3"/>' +
+          '<rect x="24" y="26" width="12" height="32" rx="4" fill="#cbd5e1" stroke="#1f2a3a" stroke-width="2.5"/>' +
+          '<rect x="114" y="26" width="12" height="32" rx="4" fill="#cbd5e1" stroke="#1f2a3a" stroke-width="2.5"/>' +
+          '<path d="M36 42 H114" stroke="#f59e0b" stroke-width="3.5" stroke-linecap="round"/>' +
+          '<text x="75" y="72" text-anchor="middle" font-size="11.5" font-weight="800" fill="#7a6a52">电流太大就熔断</text>');
+      }
+    },
+
     motor: {
       name: '电动机', short: '电机', w: 150, h: 124,
       terms: [{ id: 'a', x: 14, y: 106 }, { id: 'b', x: 136, y: 106 }],
@@ -208,6 +283,48 @@
           '<line x1="112" y1="61" x2="126" y2="61" stroke="#6b7280" stroke-width="6" stroke-linecap="round"/>' +
           '<g class="motor-rotor"><path d="M133 48 q10 13 0 26 q-10 -13 0 -26" fill="#60a5fa" stroke="' + INK + '" stroke-width="2.5"/></g>' +
           '<text x="75" y="118" text-anchor="middle" font-size="12" font-weight="800" fill="#7a6a52">电机</text>');
+      }
+    },
+
+    /* 电流表：串在电路里，显示这条路上的电流 */
+    ammeter: {
+      name: '电流表', short: '电流表', w: 132, h: 142,
+      terms: [{ id: 'a', x: 20, y: 120 }, { id: 'b', x: 112, y: 120 }],
+      model: function () { return { kind: 'resistor', a: 'a', b: 'b', r: 0.01 }; },
+      spec: {
+        text: '内阻约 0.01Ω · 要串联使用'
+      },
+      art: function () {
+        return svg(132, 142,
+          '<path d="M46 98 L20 120" fill="none" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+          '<path d="M86 98 L112 120" fill="none" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+          '<circle cx="66" cy="64" r="44" fill="#fffdf8" stroke="#1f2a3a" stroke-width="3.5"/>' +
+          '<path d="M66 64 L44 34" stroke="#ef4444" stroke-width="4" stroke-linecap="round"/>' +
+          '<circle cx="66" cy="64" r="4.5" fill="#1f2a3a"/>' +
+          '<text x="66" y="36" text-anchor="middle" font-size="14" font-weight="900" fill="#0f766e">A</text>' +
+          '<text class="meter-read" x="66" y="84" text-anchor="middle" font-size="15" font-weight="900" fill="#22314a">0 mA</text>' +
+          '<text x="66" y="138" text-anchor="middle" font-size="11.5" font-weight="800" fill="#7a6a52">电流表 · 串联</text>');
+      }
+    },
+
+    /* 电压表：并联在零件两边，显示它两端的电压 */
+    voltmeter: {
+      name: '电压表', short: '电压表', w: 132, h: 142,
+      terms: [{ id: 'a', x: 20, y: 120 }, { id: 'b', x: 112, y: 120 }],
+      model: function () { return { kind: 'resistor', a: 'a', b: 'b', r: 100000 }; },
+      spec: {
+        text: '内阻约 100kΩ · 要并联使用'
+      },
+      art: function () {
+        return svg(132, 142,
+          '<path d="M46 98 L20 120" fill="none" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+          '<path d="M86 98 L112 120" fill="none" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+          '<circle cx="66" cy="64" r="44" fill="#fffdf8" stroke="#1f2a3a" stroke-width="3.5"/>' +
+          '<path d="M66 64 L46 32" stroke="#0f766e" stroke-width="4" stroke-linecap="round"/>' +
+          '<circle cx="66" cy="64" r="4.5" fill="#1f2a3a"/>' +
+          '<text x="66" y="36" text-anchor="middle" font-size="14" font-weight="900" fill="#1d4ed8">V</text>' +
+          '<text class="meter-read" x="66" y="84" text-anchor="middle" font-size="15" font-weight="900" fill="#22314a">0.00 V</text>' +
+          '<text x="66" y="138" text-anchor="middle" font-size="11.5" font-weight="800" fill="#7a6a52">电压表 · 并联</text>');
       }
     },
 
@@ -252,15 +369,22 @@
     buzzer: '<svg viewBox="0 0 64 40"><circle cx="28" cy="20" r="14" fill="#475569" stroke="#22314a" stroke-width="3"/><circle cx="28" cy="20" r="8" fill="#64748b"/><circle cx="28" cy="20" r="3" fill="#1e293b"/><path d="M46 13q6 7 0 14" fill="none" stroke="#38bdf8" stroke-width="3" stroke-linecap="round"/></svg>',
     diode: '<svg viewBox="0 0 64 40"><path d="M6 20h12M46 20h12" stroke="#b8c2cc" stroke-width="4" stroke-linecap="round"/><rect x="18" y="9" width="28" height="22" rx="4" fill="#2a2a2a" stroke="#111" stroke-width="2"/><rect x="39" y="9" width="7" height="22" fill="#e6e6e6"/></svg>',
     motor: '<svg viewBox="0 0 64 40"><rect x="10" y="12" width="34" height="20" rx="7" fill="#cfd4da" stroke="#22314a" stroke-width="2.6"/><rect x="10" y="12" width="7" height="20" rx="3.5" fill="#9aa3ad" stroke="#22314a" stroke-width="2"/><line x1="44" y1="22" x2="51" y2="22" stroke="#6b7280" stroke-width="4" stroke-linecap="round"/><path d="M54 17q4 5 0 10q-4 -5 0 -10" fill="#60a5fa" stroke="#22314a" stroke-width="1.8"/></svg>',
+    button: '<svg viewBox="0 0 64 40"><path d="M6 27h8M50 27h8" stroke="#8c8c8c" stroke-width="4" stroke-linecap="round"/><rect x="14" y="14" width="36" height="24" rx="8" fill="#e3e8ee" stroke="#22314a" stroke-width="2.6"/><circle cx="32" cy="28" r="8.5" fill="#ef4444" stroke="#22314a" stroke-width="2.4"/></svg>',
+    pot: '<svg viewBox="0 0 64 40"><path d="M6 28h8M50 28h8" stroke="#9aa7b8" stroke-width="4" stroke-linecap="round"/><rect x="14" y="20" width="36" height="16" rx="6" fill="#f0dcc0" stroke="#22314a" stroke-width="2.4"/><circle cx="32" cy="12" r="7" fill="#94a3b8" stroke="#22314a" stroke-width="2.2"/><path d="M32 19v2" stroke="#22314a" stroke-width="2.4"/><path d="M32 24l-3.5-5h7z" fill="#22314a"/></svg>',
+    fuse: '<svg viewBox="0 0 64 40"><path d="M4 20h8M52 20h8" stroke="#9aa7b8" stroke-width="4" stroke-linecap="round"/><rect x="12" y="10" width="40" height="20" rx="8" fill="#e0f2fe" stroke="#22314a" stroke-width="2.4"/><rect x="12" y="12" width="7" height="16" rx="3" fill="#cbd5e1" stroke="#22314a" stroke-width="2"/><rect x="45" y="12" width="7" height="16" rx="3" fill="#cbd5e1" stroke="#22314a" stroke-width="2"/><path d="M19 20h26" stroke="#f59e0b" stroke-width="3" stroke-linecap="round"/></svg>',
+    ammeter: '<svg viewBox="0 0 64 40"><circle cx="32" cy="20" r="15" fill="#fffdf8" stroke="#22314a" stroke-width="2.6"/><path d="M32 20l-7-9" stroke="#ef4444" stroke-width="2.6" stroke-linecap="round"/><text x="32" y="31" text-anchor="middle" font-size="12" font-weight="900" fill="#0f766e">A</text></svg>',
+    voltmeter: '<svg viewBox="0 0 64 40"><circle cx="32" cy="20" r="15" fill="#fffdf8" stroke="#22314a" stroke-width="2.6"/><path d="M32 20l-8-8" stroke="#0f766e" stroke-width="2.6" stroke-linecap="round"/><text x="32" y="31" text-anchor="middle" font-size="12" font-weight="900" fill="#1d4ed8">V</text></svg>',
     breadboard: '<svg viewBox="0 0 64 40"><rect x="4" y="5" width="56" height="30" rx="5" fill="#d9d9d9" stroke="#22314a" stroke-width="2.5"/><line x1="10" y1="10" x2="54" y2="10" stroke="#ff0000" stroke-width="2"/><line x1="10" y1="14" x2="54" y2="14" stroke="#0000ff" stroke-width="2"/><line x1="10" y1="26" x2="54" y2="26" stroke="#0000ff" stroke-width="2"/><line x1="10" y1="30" x2="54" y2="30" stroke="#ff0000" stroke-width="2"/><rect x="14" y="17.5" width="36" height="5" rx="2" fill="#c9c9c9"/></svg>'
   };
 
   var DEFAULT_PROPS = {
     battery: { voltage: 3 },
     switch: { closed: true },
+    button: { pressed: false },
     resistor: { resistance: 100 },
+    pot: { resistance: 500 },
     led: { color: '#ff5d5d' },
-    lamp: {}, buzzer: {}, diode: {}, motor: {}, breadboard: {}
+    lamp: {}, buzzer: {}, diode: {}, fuse: {}, motor: {}, ammeter: {}, voltmeter: {}, breadboard: {}
   };
 
   /* 每个零件的「小讲解」：点一下零件、点零件箱里的问号，都会用中文读出来 */
@@ -275,10 +399,20 @@
       how: '两个接线柱分别接在电路里，点一下开关，就能合上或者断开。',
       tip: '电路不工作时，先看看开关是不是断开了。真的开关能通过的电流是有限的，大约 1.5 安培。'
     },
+    button: {
+      what: '按钮像电动的门铃。按住它，电流才能过去；一松手，电流就断了。',
+      how: '两个接线柱接在电路里，用手指按住按钮，电路就通了，松开就断开。',
+      tip: '按钮和开关是一对好兄弟：开关按一下会卡住，按钮要一直按着。真的按钮能通过 1.5 安培左右的电流。'
+    },
     resistor: {
       what: '电阻是电流的减速带。它把电流变小，保护 LED 不被烧坏。',
       how: '电阻没有方向，随便哪一头接一边，通常和 LED 手拉手串在一起。',
       tip: '100 欧姆电流大，1 千欧电流小。真实的电阻能承受的功率是 1/4 瓦，电流太大它会发烫、冒烟，然后烧坏。'
+    },
+    pot: {
+      what: '可变电阻是一个能拧大拧小的减速带。电阻变小，电流变大，灯就更亮。',
+      how: '两个接线柱接在电路里。点住它，再拖动滑块，就能改变电阻的大小。',
+      tip: '把它和 LED 手拉手串在一起，就变成能调亮度的台灯啦。它最大 1000 欧姆，能承受 1/4 瓦，电阻调得太小、电流太大，它也会发烫烧坏。'
     },
     led: {
       what: 'LED 是一种小灯泡，电流通过时它会发光，而且很省电。',
@@ -300,10 +434,25 @@
       how: '有 + 的一头接电流来的方向，另一头接电流要去的方向。',
       tip: '接反了电流就过不去，整个电路都不工作。真实二极管会吃掉 0.7 伏左右的电压。它不是用电器：直接接在电池两头等于短路，电流超过额定的 200 毫安，它会烧坏。'
     },
+    fuse: {
+      what: '保险丝是电路的安全卫士。电流太大时，它会自己熔断，把电路断开，保护电池和别的零件。',
+      how: '把它像开关一样串在电路里，接在两个接线点中间。',
+      tip: '它额定 0.5 安培，超过就会熔断。熔断以后，点它一下，再点「换一个新的」，就能继续玩。真正的电器里也常常藏着保险丝。'
+    },
     motor: {
       what: '电动机里面有线圈。电流通过时会产生磁力，让电机转起来。',
       how: '两个接线柱接在电路里，电流越大，转得越快。',
-      tip: '电机需要比较大的电流，3V 时约 150 毫安，额定 300 毫安左右。用 9V 电池，线圈会过热烧坏。'
+      tip: '电机需要比较大的电流，3V 时约 150 毫安，额定 300 毫安左右。用 9V 电池，线圈会过热烧坏。把两根线对调一下，它就会反着转，点电机再点「🔄 调换两根线」就行。'
+    },
+    ammeter: {
+      what: '电流表会告诉你这条路上的电流有多大。',
+      how: '要「串」在电路里：让电流从它身上流过，它才知道有多大。',
+      tip: '它的内阻很小，大约 0.01 欧姆，所以不会挡住电流。千万不要把它直接并联在电池两头，那等于短路，会爆炸。'
+    },
+    voltmeter: {
+      what: '电压表会告诉你零件两端的电压有多大。',
+      how: '要「并联」在零件两边：把电压表的两根线分别接到零件的两头。',
+      tip: '它的内阻很大，大约 100 千欧，几乎没有电流从它身上走。所以它要并联，串进电路会让电流走不动。'
     },
     breadboard: {
       what: '面包板是一块不用焊接的接线板，可以把电分给很多零件。',
@@ -328,7 +477,7 @@
   global.PART_GUIDES = PART_GUIDES;
   global.specTextOf = specTextOf;
   global.ledVf = ledVf;
-  global.PART_ORDER = ['battery', 'wire', 'switch', 'resistor', 'led', 'lamp', 'buzzer', 'diode', 'motor', 'breadboard'];
+  global.PART_ORDER = ['battery', 'wire', 'switch', 'button', 'led', 'resistor', 'lamp', 'motor', 'buzzer', 'pot', 'fuse', 'diode', 'ammeter', 'voltmeter', 'breadboard'];
   global.CHIP_ICONS = CHIP_ICONS;
   global.DEFAULT_PROPS = DEFAULT_PROPS;
   global.fmtR = fmtR;

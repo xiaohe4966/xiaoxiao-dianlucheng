@@ -57,7 +57,8 @@
   }
   function formatCurrent(a) {
     var v = Math.abs(a);
-    if (v < 0.0005) return '0 mA';
+    if (v < 0.000001) return '0 mA';
+    if (v < 0.001) return Math.round(v * 1000000) + ' µA';
     if (v < 1) return Math.round(v * 1000) + ' mA';
     return v.toFixed(2) + ' A';
   }
@@ -77,6 +78,13 @@
     state.burnt = d.burnt || {};
     state.heat = {};
     state.selection = null;
+    releaseButtons();
+  }
+  /* 按钮是「按住才通」的，松开手 / 刷新页面都要回到断开状态 */
+  function releaseButtons() {
+    state.parts.forEach(function (p) {
+      if (p.type === 'button' && p.props) p.props.pressed = false;
+    });
   }
   function pushHistory() {
     state.presetNote = '';
@@ -215,13 +223,16 @@
     });
     return best;
   }
+  function burnVerb(part) { return part && part.type === 'fuse' ? '熔断' : '烧坏'; }
   function burnSpeech(part, st) {
     var name = (PARTS[part.type] && PARTS[part.type].short) || '零件';
-    return '哎呀，' + name + '烧坏啦！' +
-      (st.kind === 'power'
-        ? '它要消耗 ' + specValueText(st) + '，超过了 ' + specLimitText(st) + ' 的额定功率。'
-        : '里面流过了 ' + specValueText(st) + '，超过了 ' + specLimitText(st) + ' 的额定电流。') +
-      '点它，再点「换一个新的」；或者按撤销。';
+    var why = st.kind === 'power'
+      ? '它要消耗 ' + specValueText(st) + '，超过了 ' + specLimitText(st) + ' 的额定功率。'
+      : '里面流过了 ' + specValueText(st) + '，超过了 ' + specLimitText(st) + ' 的额定电流。';
+    if (part.type === 'fuse') {
+      return '保险丝熔断啦！' + why + '它自己断开，是为了保护电池和别的零件。点它，再点「换一个新的」，就能继续玩。';
+    }
+    return '哎呀，' + name + '烧坏啦！' + why + '点它，再点「换一个新的」；或者按撤销。';
   }
   function burn(part, st) {
     if (state.burnt[part.id]) return;
@@ -233,7 +244,7 @@
     };
     state.heat[part.id] = 1;
     audio.fizzle();
-    UI.toast('💨 ' + ((PARTS[part.type] && PARTS[part.type].short) || '零件') + '烧坏啦！', 'bad');
+    UI.toast('💨 ' + ((PARTS[part.type] && PARTS[part.type].short) || '零件') + burnVerb(part) + '啦！', 'bad');
     UI.speak(burnSpeech(part, st));
     evaluate();
     commit();       /* 把「烧坏了」记下来，刷新页面也还在 */
@@ -249,15 +260,18 @@
     UI.speak('换好啦，崭新的' + ((part && PARTS[part.type] && PARTS[part.type].short) || '零件') + '。再通电试试吧。');
     UI.toast('🔧 换好啦！', 'good');
   }
-  /* 一边通电一边看谁在发烫：撑过 0.7 秒才烧坏，超 3 倍立刻烧坏 */
+  /* 一边通电一边看谁在发烫：撑过 0.7 秒才烧坏，超 3 倍立刻烧坏。
+     短路的时候别的零件交给爆炸，只有保险丝还会「啪」一下熔断——它本来就是干这个的。 */
   function thermalTick() {
     if (!state.running || state.exploding) return;
-    var sim = state.sim; if (!sim || sim.short) return;   /* 短路交给爆炸 */
+    var sim = state.sim; if (!sim) return;
+    var shorted = !!sim.short;
     var now = Date.now();
     var dt = Math.min(250, now - (state.heatAt || now));
     state.heatAt = now;
     state.parts.forEach(function (p) {
       if (state.burnt[p.id]) return;
+      if (shorted && p.type !== 'fuse') return;
       var st = stressOf(p, sim.parts[p.id]);
       if (!st || st.ratio <= 1) {
         state.heat[p.id] = Math.max(0, (state.heat[p.id] || 0) - dt / 900);
@@ -341,6 +355,9 @@
     } else if (part.type === 'diode') {
       msg = '二极管里有 ' + specValueText(st) + '，超过额定的 ' + specLimitText(st) +
         '。二极管不是用电器，电流太大它会烧坏，要在它旁边串一个灯泡、电阻、LED 或者电机。';
+    } else if (part.type === 'fuse') {
+      msg = '保险丝里有 ' + specValueText(st) + '，超过额定的 ' + specLimitText(st) +
+        '，它马上就会熔断。它在保护电池——不过也要想想，是不是哪里接错了？';
     } else {
       msg = name + '里有 ' + specValueText(st) + '，超过额定的 ' + specLimitText(st) +
         '，会越来越烫，然后烧坏。是不是电池电压太高啦？';
@@ -359,11 +376,14 @@
     if (burntPart) {
       var bd = state.burnt[burntPart.id] || {};
       var bname = (PARTS[burntPart.type] && PARTS[burntPart.type].short) || '零件';
+      var isFuse = burntPart.type === 'fuse';
       return {
         code: 'burnt', partId: burntPart.id,
-        message: '「' + bname + '」烧坏啦！它' + (bd.kind === 'power' ? '要消耗 ' : '里面流过了 ') +
+        message: '「' + bname + '」' + burnVerb(burntPart) + '啦！它' + (bd.kind === 'power' ? '要消耗 ' : '里面流过了 ') +
           (bd.valueText || '太大') + '，超过了额定的 ' + (bd.limitText || '额定值') +
-          '，所以烧断了。点它一下，再点「🔧 换一个新的」；或者按撤销。'
+          (isFuse
+            ? '，所以就熔断了。它替电池挡住了大电流，保护了其他零件——点它一下，再点「🔧 换一个新的」就能继续玩。'
+            : '，所以烧断了。点它一下，再点「🔧 换一个新的」；或者按撤销。')
       };
     }
     if (sim && sim.short) {
@@ -385,8 +405,13 @@
       };
       var diodeInLoop = carries('diode');
       var switchInLoop = carries('switch');
-      var culprit = diodeInLoop || switchInLoop;
+      var fuseInLoop = carries('fuse');
+      var culprit = diodeInLoop || switchInLoop || fuseInLoop;
       var out = { code: 'short', wireId: w ? w.id : null, partId: culprit ? culprit.id : (bat ? bat.id : null) };
+      if (fuseInLoop) {
+        out.message = '短路啦！不过中间有保险丝——通电时它会先「啪」地熔断，替电池挡住大电流。这是它的工作，但也不要故意短路哦。';
+        return out;
+      }
       if (diodeInLoop) {
         out.message = '短路啦！二极管不是用电器，它只是一扇单向门。把它直接接在电池两头，电流就抄近路跑回去了，二极管会发烫烧坏。要在它旁边加一个灯泡、电阻、LED 或者电机。';
         return out;
@@ -398,10 +423,11 @@
       out.message = '短路啦！有一根电线直接把电池的正极和负极连起来了。快把中间的电线拿掉，或者在中间加一个灯泡、电阻、电机、喇叭。';
       return out;
     }
-    if (sim && sim.totalCurrent > 0.0006) {
+    if (sim && sim.totalCurrent > 0.00001) {
       var worst = worstStress();
       if (worst && worst.st.ratio > 1) return overloadFault(worst.part, worst.st);
-      return { code: 'ok' };
+      /* 电流小到 1mA 以下：电路是通的，但什么也带不动（常见于电压表串进了电路） */
+      return { code: 'ok', tiny: sim.totalCurrent < 0.001 };
     }
     var i, p;
     for (i = 0; i < state.parts.length; i++) {
@@ -410,6 +436,15 @@
         return {
           code: 'open-switch', partId: p.id,
           message: '开关断开了，电流过不去。点一下开关，让它合上。'
+        };
+      }
+    }
+    for (i = 0; i < state.parts.length; i++) {
+      p = state.parts[i];
+      if (p.type === 'button' && !p.props.pressed) {
+        return {
+          code: 'open-switch', partId: p.id, button: true,
+          message: '按钮还没按下去，电流过不去。按住按钮，它才会通电；松开就断开。'
         };
       }
     }
@@ -498,6 +533,7 @@
     { id: 'led', icon: '💡', label: '点亮 LED 灯', type: 'led', hint: '放一个电池、一个电阻和一个 LED，连成一个圈，再通电。' },
     { id: 'lamp', icon: '🔆', label: '点亮小灯泡', type: 'lamp', hint: '电池、开关和小灯泡连成一个圈，按通电试试。' },
     { id: 'motor', icon: '🌀', label: '让电机转起来', type: 'motor', hint: '把电机接在电池和开关中间，通电后它就会转。' },
+    { id: 'motorRev', icon: '🔄', label: '让电机反转', type: 'motor', back: true, hint: '点中电机，再点「🔄 调换两根线（反转）」，它就会反着转。' },
     { id: 'buzzer', icon: '🔊', label: '让喇叭唱起歌', type: 'buzzer', hint: '把喇叭接进电路，通电后它会发出声音。' }
   ];
   function checkTasks(sim) {
@@ -505,7 +541,9 @@
       if (state.achieved.indexOf(t.id) >= 0) return;
       var hit = state.parts.some(function (p) {
         var info = sim.parts[p.id];
-        return p.type === t.type && info && Math.abs(info.current) > 0.0018;
+        if (!info || p.type !== t.type) return false;
+        if (t.back) return info.current < -0.0018;      /* 电流反着流 = 反转 */
+        return Math.abs(info.current) > 0.0018;
       });
       if (hit) {
         state.achieved.push(t.id);
@@ -630,10 +668,27 @@
     },
     motor: {
       name: '让电机转', icon: '🌀', desc: '电流让电机里的线圈转起来。',
-      note: '电流越大，电机转得越快。',
+      note: '电流越大，电机转得越快。直流电机还有个本事：把两根线对调，它就会反着转，点电机再点「🔄 调换两根线（反转）」试试。',
       build: function () {
         var bat = makePart('battery', 100, 300), sw = makePart('switch', 340, 301), m = makePart('motor', 620, 280);
         return [pwire(bat, 'pos', sw, 'a'), pwire(sw, 'b', m, 'a'), pwire(m, 'b', bat, 'neg')];
+      }
+    },
+    fade: {
+      name: '调光灯', icon: '🎛️', desc: '用可变电阻拧大拧小，LED 就变亮变暗。',
+      note: '点中可变电阻，拖动滑块就能改电阻：电阻小，电流大，灯更亮。',
+      build: function () {
+        var bat = makePart('battery', 60, 300), sw = makePart('switch', 292, 301),
+            pot = makePart('pot', 500, 300, { resistance: 100 }), led = makePart('led', 760, 285);
+        return [pwire(bat, 'pos', sw, 'a'), pwire(sw, 'b', pot, 'a'), pwire(pot, 'b', led, 'an'), pwire(led, 'ca', bat, 'neg')];
+      }
+    },
+    fuse: {
+      name: '保险丝保护', icon: '🧯', desc: '电线直接连电池两头，可是中间有保险丝。',
+      note: '通电试试：保险丝会「啪」地熔断，替电池挡住大电流。这就是它的工作。',
+      build: function () {
+        var bat = makePart('battery', 160, 300), f = makePart('fuse', 420, 300);
+        return [pwire(bat, 'pos', f, 'a'), pwire(f, 'b', bat, 'neg')];
       }
     },
     buzzer: {
@@ -695,7 +750,7 @@
       }
     } catch (e) {}
     if (!loaded) loadPreset('led', true);
-    else { UI.renderAll(); evaluate(); }
+    else { releaseButtons(); UI.renderAll(); evaluate(); }
     UI.updateSound();
     UI.updateVoice();
     UI.updateUndo();
@@ -724,6 +779,7 @@
     loadPreset: loadPreset, audio: audio, init: init,
     duplicateProps: duplicateProps,
     repairPart: repairPart, stressOf: stressOf, worstStress: worstStress,
+    burnVerb: burnVerb, releaseButtons: releaseButtons,
     specLimitText: specLimitText, specValueText: specValueText
   };
 

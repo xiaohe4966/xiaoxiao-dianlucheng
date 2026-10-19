@@ -32,7 +32,7 @@
   /* 额定值也要念出来：这就是「真实电路」里零件能承受的极限 */
   function specSayOf(part) {
     var t = global.specTextOf ? specTextOf(part) : '';
-    return t ? '它的额定值是：' + t.replace(/·/g, '，') + '。' : '';
+    return t ? '它的参数是：' + t.replace(/·/g, '，') + '。' : '';
   }
   function explainType(type) {
     var g = guideOf(type);
@@ -161,7 +161,8 @@
       var term = e.target.closest('.terminal');
       if (term) return;
       var partEl = e.target.closest('.part');
-      if (partEl && partEl.dataset.type !== 'switch') {
+      /* 开关和按钮要用手按，双击不删它们，免得按两下就没了 */
+      if (partEl && partEl.dataset.type !== 'switch' && partEl.dataset.type !== 'button') {
         App.deletePart(partEl.dataset.id);
       }
     });
@@ -274,6 +275,7 @@
     node.style.height = def.h + 'px';
     node.classList.toggle('selected', !!(selectedId && selectedId === part.id));
     node.classList.toggle('is-led', part.type === 'led');
+    node.classList.toggle('is-pressed', part.type === 'button' && !!part.props.pressed);
     if (part.type === 'led') {
       node.style.setProperty('--led-color', part.props.color || '#ff5d5d');
       node.style.setProperty('--glow-color', part.props.color || '#ff5d5d');
@@ -383,7 +385,7 @@
       var node = partEls[p.id]; if (!node) return;
       var info = sim && sim.parts[p.id];
       var a = info ? Math.abs(info.current) : 0;
-      var intensity = 0, spin = 1.2, on = false;
+      var intensity = 0, spin = 1.2, on = false, back = false;
       if (running && info) {
         if (p.type === 'led') { intensity = Math.min(1.25, a / 0.012); on = a > 0.0008; }
         else if (p.type === 'lamp') { intensity = Math.min(1.25, a / 0.03); on = a > 0.001; }
@@ -391,19 +393,30 @@
         else if (p.type === 'motor') {
           var speed = Math.min(1.5, a / 0.12); on = a > 0.002;
           spin = Math.max(0.22, 1.5 - speed * 0.9); intensity = Math.min(1, speed);
+          back = info.current < -0.0002;      /* 电流反着流 = 电机反转 */
         } else if (p.type === 'diode') { on = a > 0.0008; intensity = Math.min(1, a / 0.05); }
-        else if (p.type === 'resistor') { intensity = Math.min(0.8, info.power / 0.6); }
+        else if (p.type === 'resistor' || p.type === 'pot') { intensity = Math.min(0.8, Math.abs(info.power) / 0.6); }
       }
       var burnt = !!(App.state.burnt && App.state.burnt[p.id]);
       var heat = (App.state.heat && App.state.heat[p.id]) || 0;
-      if (burnt) { intensity = 0; on = false; }
+      if (burnt) { intensity = 0; on = false; back = false; }
       node.style.setProperty('--intensity', intensity.toFixed(2));
       node.style.setProperty('--spin', spin.toFixed(2) + 's');
       node.style.setProperty('--heat', Math.min(1, heat).toFixed(2));
       node.classList.toggle('is-on', !!on);
+      node.classList.toggle('is-back', !!back);
       node.classList.toggle('is-burnt', burnt);
       node.classList.toggle('is-hot', !burnt && heat > 0.02);
       node.classList.toggle('is-rev', !!(info && info.reversed) && !burnt);
+      /* 电流表和电压表上的数字：断电时显示 0 */
+      if (p.type === 'ammeter' || p.type === 'voltmeter') {
+        var read = node.querySelector('.meter-read');
+        if (read) {
+          var liveRead = running && info && !burnt;
+          if (p.type === 'ammeter') read.textContent = liveRead ? App.formatCurrent(info.current) : '0 mA';
+          else read.textContent = liveRead ? Math.abs(info.vdrop).toFixed(2) + ' V' : '0.00 V';
+        }
+      }
       var faultNow = App.state.lastFault;
       var live = running || App.state.exploding;   /* 爆炸动画期间也要继续提示是谁短路 */
       var battLoad = 0;
@@ -416,7 +429,7 @@
       var badge = node.querySelector('.part-badge');
       if (badge) {
         if (burnt) {
-          badge.textContent = '烧坏啦 💨';
+          badge.textContent = burnWord(p) + '啦 💨';
           badge.className = 'part-badge show burnt';
         } else if (heat > 0.15) {
           badge.textContent = '好烫！♨️';
@@ -428,7 +441,7 @@
           badge.textContent = '亮啦！';
           badge.className = 'part-badge show good';
         } else if (running && p.type === 'motor' && a > 0.01) {
-          badge.textContent = '转起来！';
+          badge.textContent = info.current < 0 ? '反转 ⟲' : '正转 ⟳';
           badge.className = 'part-badge show good';
         } else {
           badge.className = 'part-badge';
@@ -436,6 +449,23 @@
       }
     });
     renderWires();
+  }
+  /* 保险丝是「熔断」，别的零件是「烧坏」 */
+  function burnWord(part) { return App.burnVerb ? App.burnVerb(part) : '烧坏'; }
+  /* 按住 / 松开按钮（按住才通电） */
+  function pressButton(part, on) {
+    if (!part || !part.props) return;
+    if (part.type !== 'button') return;
+    if (!!part.props.pressed === !!on) return;
+    part.props.pressed = !!on;
+    var node = partEls[part.id];
+    if (node) node.classList.toggle('is-pressed', !!on);
+    var btn = $('insPress');
+    if (btn) {
+      btn.classList.toggle('on', !!on);
+      btn.textContent = on ? '👆 正在通电…' : '👆 按住通电';
+    }
+    App.evaluate();
   }
   /* 过热 / 烧坏时的即时外观（通电时每 0.12 秒刷新一次，不重画电线） */
   function updateHeat() {
@@ -449,7 +479,7 @@
       var badge = node.querySelector('.part-badge');
       if (!badge) return;
       if (burnt) {
-        badge.textContent = '烧坏啦 💨';
+        badge.textContent = burnWord(p) + '啦 💨';
         badge.className = 'part-badge show burnt';
       } else if (heat > 0.15) {
         badge.textContent = '好烫！♨️';
@@ -488,7 +518,10 @@
   function statusTextFor(fault, running) {
     if (fault.code === 'short') return running ? '⚠️ 短路！电流太大' : '⚠️ 短路警告：通电会爆炸';
     if (fault.code === 'no-battery') return '还没有电池';
-    if (fault.code === 'open-switch') return '开关断开了';
+    if (fault.code === 'open-switch') {
+      var osp = fault.partId && App.byId(fault.partId);
+      return osp && osp.type === 'button' ? '按钮还没按住' : '开关断开了';
+    }
     if (fault.code === 'reversed') return fault.type === 'led' ? 'LED 接反了' : '二极管接反了';
     if (fault.code === 'loose') {
       var lp = fault.partId && App.byId(fault.partId);
@@ -501,10 +534,10 @@
     }
     if (fault.code === 'burnt') {
       var bp = fault.partId && App.byId(fault.partId);
-      return '💨 ' + (bp ? (PARTS[bp.type].short || PARTS[bp.type].name) : '零件') + '烧坏了';
+      return '💨 ' + (bp ? (PARTS[bp.type].short || PARTS[bp.type].name) : '零件') + (bp ? burnWord(bp) : '烧坏') + '了';
     }
     if (fault.code === 'open') return '电路还没连成一个圈';
-    if (fault.code === 'ok') return running ? '⚡ 电流正在跑' : '电路连好啦，可以通电';
+    if (fault.code === 'ok') return running ? (fault.tiny ? '⚡ 电流太小啦' : '⚡ 电流正在跑') : '电路连好啦，可以通电';
     return running ? '⚡ 电流正在跑' : '点右上角「通电试试」';
   }
   function doctorFor(fault, sim) {
@@ -527,7 +560,11 @@
         : '这个电路短路啦：电线直接连了电池两头。通电会💥！加一个灯泡、电阻、电机或喇叭吧。';
     }
     if (fault.code === 'no-battery') return '先放一节 <b>电池</b> 吧，它是电流小火车的发动机。';
-    if (fault.code === 'open-switch') return '开关断开了，电流过不去。点一下开关，让它合上。';
+    if (fault.code === 'open-switch') {
+      var osp = fault.partId && App.byId(fault.partId);
+      if (osp && osp.type === 'button') return '<b>按钮还没按住。</b>按住它，电流才能过去；松开就断开。';
+      return '开关断开了，电流过不去。点一下开关，让它合上。';
+    }
     if (fault.code === 'reversed') return fault.type === 'led'
       ? '<b>LED 接反啦！</b>长脚（+）要接电池正极，短脚接负极。'
       : '二极管接反啦，电流只能从三角形尖尖的方向过去哦。';
@@ -548,8 +585,23 @@
     if (fault.code === 'open') return '电路还没连成一个圈。检查一下：每个小圆点是不是都接上电线啦？';
     if (fault.code === 'ok') {
       if (!st.running) return '电路连好啦！按右上角「通电试试」吧。' + (st.presetNote ? ' ' + st.presetNote : '');
+      if (fault.tiny) {
+        var hasVm = st.parts.some(function (p) { return p.type === 'voltmeter'; });
+        return '电路是通的，但电流只有 <b>' + App.formatCurrent(sim ? sim.totalCurrent : 0) + '</b>，小得点不亮灯。' +
+          (hasVm
+            ? '<b>电压表内阻很大</b>，要并联在零件两边，不能串进电路里哦。'
+            : '检查一下是不是电阻太大，或者哪里接触不好。');
+      }
       if (hasActive(sim, 'led')) return '电流从电池 <b>+</b> 出发，经过电阻和 LED，再回到 <b>−</b>，LED 就亮啦！';
-      if (hasActive(sim, 'motor')) return '电动机转起来啦！电流越大，转得越快。';
+      if (hasActive(sim, 'motor')) {
+        var m = App.state.parts.find(function (p) {
+          var i = sim && sim.parts[p.id];
+          return p.type === 'motor' && i && Math.abs(i.current) > 0.0018;
+        });
+        var mi = m && sim.parts[m.id];
+        if (mi && mi.current < 0) return '电动机<b>反转</b>啦！两根线对调，电流反着流，它就反着转。';
+        return '电动机转起来啦！电流越大，转得越快。把两根线对调，它就会反转。';
+      }
       if (hasActive(sim, 'buzzer')) return '喇叭在唱歌：电流让纸盆振动，就发出声音啦。';
       if (hasActive(sim, 'lamp')) return '灯丝被电流加热，就发光啦。灯泡自己会限制电流。';
       return '电路通啦！电流像小火车一样跑起来了。';
@@ -621,7 +673,7 @@
     var pct = cur <= 0 ? 0 : App.clamp(Math.log10(cur * 1000 + 1) / Math.log10(2500) * 100, 5, 100);
     el.meterBar.style.width = pct + '%';
     el.meterNote.textContent = st.running
-      ? (fault.code === 'ok' ? '电流像小火车一样在跑！' : statusTextFor(fault, st.running))
+      ? (fault.code === 'ok' && !fault.tiny ? '电流像小火车一样在跑！' : statusTextFor(fault, st.running))
       : (fault.code === 'short' ? '短路很危险，断电检查一下吧'
         : (fault.code === 'burnt' ? '零件烧坏了，点它换一个新的' : '还没通电，电流在睡觉'));
     renderTasks();
@@ -648,6 +700,9 @@
   function infoFor(partId) { var sim = App.state.sim; return sim && sim.parts[partId]; }
   function renderInspector() {
     var st = App.state, sel = st.selection, body = el.inspectBody;
+    /* 正在拖电位器滑块的时候不要重建面板，不然滑块会松手 */
+    var activeEl = document.activeElement;
+    if (sel && sel.kind === 'part' && activeEl && activeEl.id === 'potRange' && activeEl.dataset.part === sel.id) return;
     if (!sel) {
       body.innerHTML = '<p class="muted">点一个零件或一根电线，就能在这里看到它的小秘密。</p>';
       return;
@@ -678,13 +733,19 @@
     if (info2) {
       html += '<div class="readout"><span>电流 <b>' + App.formatCurrent(info2.current) + '</b></span>' +
         '<span>电压 <b>' + Math.abs(info2.vdrop).toFixed(2) + ' V</b></span>' +
-        '<span>功率 <b>' + (info2.power * 1000).toFixed(0) + ' mW</b></span></div>';
+        '<span>功率 <b>' + (info2.power * 1000).toFixed(0) + ' mW</b></span>';
+      if (part.type === 'motor') {
+        var dcur = info2.current;
+        var dirTxt = Math.abs(dcur) < 0.002 ? '停着' : (dcur > 0 ? '正转 ⟳' : '反转 ⟲');
+        html += '<span>转向 <b>' + dirTxt + '</b></span>';
+      }
+      html += '</div>';
     }
     var specTxt = global.specTextOf ? specTextOf(part) : '';
     if (specTxt) html += '<p class="spec-line">📏 ' + specTxt + '</p>';
     var burntInfo = App.state.burnt[part.id];
     if (burntInfo) {
-      html += '<p class="burn-line">💨 已经烧坏了：' + (burntInfo.kind === 'power' ? '功率' : '电流') +
+      html += '<p class="burn-line">💨 已经' + burnWord(part) + '了：' + (burntInfo.kind === 'power' ? '功率' : '电流') +
         '到了 ' + (burntInfo.valueText || '') + '，超过额定的 ' + (burntInfo.limitText || '') +
         '。换一个新的才能继续工作。</p>';
     }
@@ -703,6 +764,25 @@
     } else if (part.type === 'switch') {
       html += '<div class="opt-row"><button class="opt' + (part.props.closed ? ' on' : '') + '" id="swToggle">' +
         (part.props.closed ? '已合上 · 点我断开' : '已断开 · 点我合上') + '</button></div>';
+    } else if (part.type === 'pot') {
+      var rv = Number(part.props.resistance);
+      if (!(rv >= 0)) rv = 500;
+      html += '<div class="pot-row">' +
+        '<input type="range" id="potRange" data-part="' + part.id + '" min="0" max="1000" step="10" value="' + rv + '" aria-label="拖动改变电阻大小">' +
+        '<span class="pot-val" id="potVal">' + App.fmtRes(rv) + '</span></div>' +
+        '<p class="inspect-desc">拖动滑块改变电阻：电阻小，电流大，灯更亮。</p>';
+    } else if (part.type === 'button') {
+      html += '<div class="opt-row"><button class="opt" id="insPress">👆 按住通电</button></div>' +
+        '<p class="inspect-desc">按住它电流才通过，松开手就断开。</p>';
+    } else if (part.type === 'motor') {
+      html += '<div class="opt-row"><button class="opt" id="motorRev">🔄 调换两根线（反转）</button></div>' +
+        '<p class="inspect-desc">直流电机把两根线对调，就会反着转。</p>';
+    } else if (part.type === 'fuse') {
+      html += '<p class="inspect-desc">把它像开关一样串在电路里。电流超过额定值，它会「啪」地熔断，保护电池。</p>';
+    } else if (part.type === 'ammeter') {
+      html += '<p class="inspect-desc">要「串」在电路里，电流从它身上流过，它才量得出来。</p>';
+    } else if (part.type === 'voltmeter') {
+      html += '<p class="inspect-desc">要「并联」在零件两边：两根线分别接零件的两头，就能量出它的电压。</p>';
     } else if (part.type === 'breadboard') {
       html += '<div class="readout"><span>红色 + 轨左右相通</span><span>蓝色 − 轨左右相通</span></div>';
     }
@@ -717,6 +797,43 @@
     if (rp) on(rp, 'click', function () { App.repairPart(part.id); });
     var sw = $('swToggle');
     if (sw) on(sw, 'click', function () { toggleSwitch(part); });
+    /* 电位器：拖动滑块改电阻。拖动时不要重建面板（见 renderInspector 开头的判断） */
+    var range = $('potRange');
+    if (range) {
+      var remember = function () { App.pushHistory(); };
+      on(range, 'pointerdown', remember);
+      on(range, 'keydown', remember);
+      on(range, 'input', function () {
+        part.props.resistance = Number(range.value);
+        var lab = $('potVal');
+        if (lab) lab.textContent = App.fmtRes(part.props.resistance);
+        App.evaluate();
+      });
+      on(range, 'change', function () {
+        App.commit();
+        renderParts();
+        App.audio.click();
+        speak('电阻调到' + App.fmtRes(part.props.resistance) + '。');
+      });
+    }
+    /* 按钮：按住才通电。松手的监听挂在 window 上，面板重建也不怕 */
+    var press = $('insPress');
+    if (press) {
+      on(press, 'pointerdown', function (e) {
+        e.preventDefault();
+        pressButton(part, true);
+        var up = function () {
+          global.removeEventListener('pointerup', up);
+          global.removeEventListener('pointercancel', up);
+          pressButton(part, false);
+        };
+        global.addEventListener('pointerup', up);
+        global.addEventListener('pointercancel', up);
+      });
+    }
+    /* 电机：把两根接线对调，转向就反过来 */
+    var mr = $('motorRev');
+    if (mr) on(mr, 'click', function () { reverseMotorWires(part); });
     Array.prototype.forEach.call(body.querySelectorAll('[data-voltage]'), function (b) {
       on(b, 'click', function () { changeProp(part, 'voltage', parseFloat(b.dataset.voltage)); });
     });
@@ -744,20 +861,54 @@
     speak(part.props.closed ? '开关合上啦，电流可以通过。' : '开关断开啦，电流过不去。');
     renderInspector();
   }
+  /* 把电机的两根线对调：直流电机反接就会反转 */
+  function reverseMotorWires(part) {
+    var wA = 0, wB = 0, touched = 0;
+    App.state.wires.forEach(function (w) {
+      if (w.a.part === part.id && (w.a.term === 'a' || w.a.term === 'b')) { touched++; if (w.a.term === 'a') wA++; else wB++; }
+      if (w.b.part === part.id && (w.b.term === 'a' || w.b.term === 'b')) { touched++; if (w.b.term === 'a') wA++; else wB++; }
+    });
+    if (!wA || !wB) {
+      UI.toast('先把电机的两个接线点都接上电线');
+      speak('电机的两个接线点都要接上电线，才能换方向。');
+      return;
+    }
+    App.pushHistory();
+    App.state.wires.forEach(function (w) {
+      if (w.a.part === part.id && (w.a.term === 'a' || w.a.term === 'b')) w.a.term = w.a.term === 'a' ? 'b' : 'a';
+      if (w.b.part === part.id && (w.b.term === 'a' || w.b.term === 'b')) w.b.term = w.b.term === 'a' ? 'b' : 'a';
+    });
+    App.afterChange();
+    App.audio.click();
+    var info = infoFor(part.id);
+    var txt = '两根线对调好啦。';
+    if (App.state.running && info) txt += info.current < -0.0005 ? '电机反转啦，反着转呢。' : (Math.abs(info.current) < 0.0005 ? '现在电机没转。' : '电机正转着。');
+    speak(txt);
+    UI.toast('🔄 ' + txt, 'good', { silent: true });
+  }
   function iconFor(type) {
-    var map = { battery: '🔋', switch: '🎚️', resistor: '🧱', led: '💡', lamp: '🔆', buzzer: '🔊', diode: '▶️', motor: '🌀', breadboard: '🧰' };
+    var map = {
+      battery: '🔋', switch: '🎚️', button: '🔘', resistor: '🧱', pot: '🎛️', led: '💡', lamp: '🔆',
+      buzzer: '🔊', diode: '▶️', fuse: '🧯', motor: '🌀', breadboard: '🧰',
+      ammeter: '<span class="ico-badge">A</span>', voltmeter: '<span class="ico-badge v">V</span>'
+    };
     return map[type] || '🔩';
   }
   function descFor(type) {
     var map = {
       battery: '电的来源。+ 是正极，− 是负极，电流从 + 出来，回到 −。',
       switch: '像一座小桥，点一下可以断开或合上，控制电流过不过去。',
+      button: '按住才通电的开关，一松手就断开。',
       resistor: '电流的减速带，保护 LED 不被太大的电流烧坏。',
+      pot: '可以拧大拧小的电阻，用来调灯的亮度。',
       led: '长脚(+)接电池正极，短脚接负极，电流通过就会发光。',
       lamp: '灯丝被电流加热就发光。它自己会限制电流，可以直接接电池。',
       buzzer: '电流让里面的纸盆振动，就发出声音啦。',
       diode: '电流的单向门，只允许电流从三角形尖尖的方向通过。',
-      motor: '电流通过线圈产生磁力，电机就转起来了。',
+      fuse: '电路的保险卫士：电流太大它就先熔断，保护电池和别的零件。',
+      motor: '电流通过线圈产生磁力，电机就转起来了。两根线对调，它就会反转。',
+      ammeter: '串在电路里，显示流过它的电流有多大。',
+      voltmeter: '并联在零件两边，显示它两端的电压有多大。',
       breadboard: '面包板上的红色 + 轨和蓝色 − 轨，左右两边是相通的，可以分电。',
       wire: '电流的小马路。把两个零件的接线点连起来，电流才能通过。'
     };
@@ -873,8 +1024,8 @@
       '<div class="help-item" data-speak="第三步，通电。按右上角通电试试，电线里会出现流动的小电流，LED、灯泡、电机、喇叭都会工作。"><span class="n">3</span><p><b>通电：</b>按右上角<b>「通电试试」</b>，电线里会出现流动的小电流，LED、灯泡、电机、喇叭都会工作。</p></div>' +
       '<div class="help-item" data-speak="第四步，修改和删除。拖动零件可以搬家。选中零件后点垃圾桶删除。点一下电线，中间会出现叉叉，再点它就可以删掉这根电线。按撤销都能找回。"><span class="n">4</span><p><b>修改和删除：</b>拖动零件可以搬家；选中零件后点 🗑️ 删除；点一下<b>电线</b>，中间会出现 <b>✕</b>，再点它就可以删掉这根电线；按「撤销」都能找回。</p></div>' +
       '<div class="help-item" data-speak="第五步，小心短路。电线不能直接把电池的正极和负极连起来。要在中间放一个灯泡、电阻、电机或者喇叭，不然会爆炸。"><span class="n">5</span><p><b>小心短路：</b>电线不能直接把电池的 + 和 − 连起来！要在中间放一个灯泡、电阻、电机或喇叭，不然会💥爆炸。</p></div>' +
-      '<div class="help-item" data-speak="第六步，真实电路里，每个零件都有额定值。LED 额定 20 毫安，电阻额定四分之一瓦，二极管额定 200 毫安。电流超过额定值，零件就会发烫冒烟，然后烧坏。烧坏以后，点它，再点换一个新的，就能继续玩。"><span class="n">6</span><p><b>零件会烧坏：</b>每个零件都有<b>额定值</b>：LED 20mA、电阻 1/4W、二极管 200mA……电流超了就会♨️发烫，然后💨烧坏。烧坏了点它，再点<b>「🔧 换一个新的」</b>，或者按撤销。</p></div>' +
-      '<div class="help-item" data-speak="第七步，认一认零件。电池提供电，电阻像减速带，LED 长脚接正极，二极管是单向门，面包板的正极轨和负极轨左右相通。"><span class="n">7</span><p><b>认一认：</b>电池提供电；电阻像减速带；LED 长脚接 +；二极管是单向门；面包板的 + 轨和 − 轨左右相通。</p></div>' +
+      '<div class="help-item" data-speak="第六步，真实电路里，每个零件都有额定值。LED 额定 20 毫安，电阻额定四分之一瓦，二极管额定 200 毫安，保险丝额定 0.5 安培。电流超过额定值，零件就会发烫冒烟，然后烧坏。保险丝则会自己熔断，保护电池。烧坏以后，点它，再点换一个新的，就能继续玩。"><span class="n">6</span><p><b>零件会烧坏：</b>每个零件都有<b>额定值</b>：LED 20mA、电阻 1/4W、二极管 200mA、保险丝 0.5A……电流超了就会♨️发烫，然后💨烧坏（保险丝是「啪」地熔断，保护大家）。烧坏了点它，再点<b>「🔧 换一个新的」</b>，或者按撤销。</p></div>' +
+      '<div class="help-item" data-speak="第七步，认一认零件。电池提供电，电阻像减速带，LED 长脚接正极，二极管是单向门，按钮要按住才通，可变电阻能拧大拧小，保险丝会保护电路，电流表要串联、电压表要并联，面包板的正极轨和负极轨左右相通。"><span class="n">7</span><p><b>认一认：</b>电池提供电；电阻像减速带；LED 长脚接 +；二极管是单向门；<b>按钮</b>要按住才通；<b>可变电阻</b>能拧大拧小；<b>保险丝</b>保护电路；<b>电流表</b>串联、<b>电压表</b>并联；面包板的 + 轨和 − 轨左右相通。</p></div>' +
       '<div class="help-item" data-speak="第八步，听中文讲解。点任何一个零件，都会用中文告诉你它是干什么的。右边的小电会提示哪里有问题，点听问题按钮可以再听一遍。"><span class="n">8</span><p><b>听中文讲解：</b>点任何一个零件，都会用中文告诉你它是干什么的。右边的小电会提示哪里有问题，点「听问题」可以再听一遍。顶部的「朗读」按钮可以开关全站发音。</p></div>' +
       '</div>',
       '怎么玩？这里是给小朋友和大朋友的操作说明。点每一行，我都可以念给你听。'
@@ -920,6 +1071,7 @@
     applyZoom: applyZoom, playBoom: playBoom,
     openModal: openModal, closeModal: closeModal, toast: toast,
     speak: speak, speakProblem: speakProblem, explainType: explainType, explainPart: explainPart,
+    pressButton: pressButton, reverseMotorWires: reverseMotorWires,
     partEls: partEls
   };
 })(window);
