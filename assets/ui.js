@@ -5,9 +5,43 @@
   var el = {};
   var partEls = {};
   var wireVisuals = {};
+  var lastSpokenProblem = '';
+  var lastProblemCode = '';
+  var explainTimer = null;
+  var autoProblemTimer = null;
 
   function $(id) { return document.getElementById(id); }
   function on(node, ev, fn) { if (node) node.addEventListener(ev, fn); }
+
+  /* ---------- 中文朗读小工具 ---------- */
+  function speak(text, opts) {
+    if (global.Voice) return Voice.speak(text, opts);
+    return false;
+  }
+  function speakAuto(text) {
+    if (global.Voice) return Voice.speak(text, { auto: true });
+    return false;
+  }
+  function guideOf(type) { return (global.PART_GUIDES && PART_GUIDES[type]) || null; }
+  function explainText(type, prefix) {
+    var g = guideOf(type);
+    if (!g) return prefix || '';
+    return [prefix, g.what, g.how, g.tip].filter(Boolean).join(' ');
+  }
+  function explainType(type) {
+    var g = guideOf(type);
+    if (!g) return;
+    var name = type === 'wire' ? '电线' : (PARTS[type] ? PARTS[type].name : type);
+    speak(name + '。' + explainText(type));
+  }
+  function explainPart(part, prefix) {
+    if (!part) return;
+    var g = guideOf(part.type);
+    if (!g) return;
+    var text = [prefix, PARTS[part.type].name + '。' + g.what, g.how, g.tip].filter(Boolean).join(' ');
+    speak(text);
+    renderInspector();
+  }
 
   /* ---------- 初始化 ---------- */
   function init() {
@@ -32,6 +66,12 @@
     el.runText = $('runText');
     el.btnUndo = $('btnUndo');
     el.btnSound = $('btnSound');
+    el.btnVoice = $('btnVoice');
+    el.voiceText = $('voiceText');
+    el.btnHearProblem = $('btnHearProblem');
+    el.btnListenDoctor = $('btnListenDoctor');
+    el.statusPill = $('statusPill');
+    el.doctorBubble = $('doctorBubble');
     el.modalRoot = $('modalRoot');
     el.modalCard = $('modalCard');
     el.toastRoot = $('toastRoot');
@@ -55,6 +95,19 @@
       if (App.state.sound) App.audio.click();
       App.evaluate();
     });
+    on(el.btnVoice, 'click', function () {
+      if (global.Voice) {
+        var on = Voice.toggle();
+        updateVoice();
+        if (on) Voice.speak('中文朗读打开啦。点一个零件，我就告诉你它是做什么的。');
+        else UI.toast('中文朗读关掉啦');
+      }
+    });
+    on(el.btnHearProblem, 'click', function () { speakProblem(true); });
+    on(el.btnListenDoctor, 'click', function () {
+      speak(el.doctorBubble.getAttribute('data-speak') || el.doctorBubble.textContent || '');
+    });
+    on(el.statusPill, 'click', function () { speakProblem(true); });
     on($('zoomIn'), 'click', function () { setZoom(App.state.zoom + 0.2); });
     on($('zoomOut'), 'click', function () { setZoom(App.state.zoom - 0.2); });
     on($('zoomFit'), 'click', function () { setZoom(1); });
@@ -72,7 +125,28 @@
       var partEl = e.target.closest('.part');
       if (partEl) Interact.startPartDrag(e, partEl);
     });
+    /* 点一下零件：中文讲解它是干什么的 */
+    on(el.partsLayer, 'click', function (e) {
+      if (e.target.closest('.terminal') || e.target.closest('.part-del')) return;
+      var partEl = e.target.closest('.part');
+      if (!partEl) return;
+      if (explainTimer) { clearTimeout(explainTimer); explainTimer = null; }
+      var id = partEl.dataset.id;
+      explainTimer = setTimeout(function () {
+        explainTimer = null;
+        var part = App.byId(id);
+        if (!part) return;
+        select({ kind: 'part', id: id });
+        var info = infoFor(id);
+        var extra = '';
+        if (info && App.state.running && Math.abs(info.current) > 0.0008) {
+          extra = '现在它里面有' + App.formatCurrent(info.current) + '的电流。';
+        }
+        explainPart(part, extra);
+      }, 230);
+    });
     on(el.partsLayer, 'dblclick', function (e) {
+      if (explainTimer) { clearTimeout(explainTimer); explainTimer = null; }
       var term = e.target.closest('.terminal');
       if (term) return;
       var partEl = e.target.closest('.part');
@@ -88,7 +162,15 @@
         return;
       }
       var g = e.target.closest('.wire');
-      if (g) { select({ kind: 'wire', id: g.dataset.wire }); }
+      if (g) {
+        select({ kind: 'wire', id: g.dataset.wire });
+        var w = App.state.wires.find(function (q) { return q.id === g.dataset.wire; });
+        var wi = w && App.state.sim && App.state.sim.wires[w.id];
+        var t = guideOf('wire');
+        var extra2 = wi && App.state.running && Math.abs(wi.current) > 0.0008
+          ? '这根电线里现在有' + App.formatCurrent(wi.current) + '的电流。' : '';
+        speak('电线。' + (t ? t.what + ' ' + t.how + ' ' + t.tip : '') + ' ' + extra2);
+      }
     });
     on(el.stage, 'pointerdown', function (e) {
       if (e.target.closest('.part') || e.target.closest('.wire')) return;
@@ -106,16 +188,38 @@
   function renderPalette() {
     el.partsGrid.innerHTML = '';
     PART_ORDER.forEach(function (type) {
+      var wrap = document.createElement('div');
+      wrap.className = 'chip-wrap';
+
       var chip = document.createElement('button');
       chip.type = 'button';
       chip.className = 'part-chip' + (type === 'wire' ? ' tool-chip' : '');
       chip.dataset.type = type;
+      chip.setAttribute('data-nospeak', '1');
       var icon = CHIP_ICONS[type] || '';
       var label = type === 'wire' ? '电线' : (PARTS[type] ? PARTS[type].short : type);
       var badge = type === 'wire' ? '<span class="chip-badge">点我</span>' : '';
       chip.innerHTML = badge + icon + '<span>' + label + '</span>';
       on(chip, 'pointerdown', function (e) { Interact.startSpawn(e, type, chip); });
-      el.partsGrid.appendChild(chip);
+
+      var info = document.createElement('button');
+      info.type = 'button';
+      info.className = 'chip-info';
+      info.dataset.nospeak = '1';
+      info.title = '听一听' + label + '是做什么的';
+      info.setAttribute('aria-label', '听一听' + label + '是做什么的');
+      info.textContent = '?';
+      on(info, 'pointerdown', function (e) { e.stopPropagation(); });
+      on(info, 'click', function (e) {
+        e.stopPropagation();
+        App.audio.click();
+        explainType(type);
+        UI.toast(label + '：' + (guideOf(type) ? guideOf(type).what : ''), 'good');
+      });
+
+      wrap.appendChild(chip);
+      wrap.appendChild(info);
+      el.partsGrid.appendChild(wrap);
     });
   }
 
@@ -326,6 +430,11 @@
     if (fault.code === 'no-battery') return '还没有电池';
     if (fault.code === 'open-switch') return '开关断开了';
     if (fault.code === 'reversed') return fault.type === 'led' ? 'LED 接反了' : '二极管接反了';
+    if (fault.code === 'loose') {
+      var lp = fault.partId && App.byId(fault.partId);
+      return lp ? '「' + PARTS[lp.type].name + '」有个接线点没接电线' : '有接线点还没接电线';
+    }
+    if (fault.code === 'no-resistor') return 'LED 电流太大，加个电阻吧';
     if (fault.code === 'open') return '电路还没连成一个圈';
     if (fault.code === 'ok') return running ? '⚡ 电流正在跑' : '电路连好啦，可以通电';
     return running ? '⚡ 电流正在跑' : '点右上角「通电试试」';
@@ -341,6 +450,14 @@
     if (fault.code === 'reversed') return fault.type === 'led'
       ? '<b>LED 接反啦！</b>长脚（+）要接电池正极，短脚接负极。'
       : '二极管接反啦，电流只能从三角形尖尖的方向过去哦。';
+    if (fault.code === 'loose') {
+      var lp = fault.partId && App.byId(fault.partId);
+      if (lp) {
+        var termName = App.termLabel ? App.termLabel(lp, fault.term) : '接线点';
+        return '<b>「' + PARTS[lp.type].name + '」的' + termName + '还没接电线。</b>点这个小圆点，再点另一个小圆点，把它连起来。';
+      }
+    }
+    if (fault.code === 'no-resistor') return '<b>LED 电流太大啦！</b>它需要串一个电阻来保护，不然会烧坏。';
     if (fault.code === 'open') return '电路还没连成一个圈。检查一下：每个小圆点是不是都接上电线啦？';
     if (fault.code === 'ok') {
       if (!st.running) return '电路连好啦！按右上角「通电试试」吧。' + (st.presetNote ? ' ' + st.presetNote : '');
@@ -353,6 +470,43 @@
     if (st.presetNote) return st.presetNote;
     return '我是小电！点零件上的小圆点，再点另一个小圆点，就能连电线啦。';
   }
+  function plainText(html) {
+    var d = document.createElement('div');
+    d.innerHTML = String(html || '');
+    return (d.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+  /* 把「哪里有问题」用中文念出来：手动点按钮，或状态变化时自动提示一次 */
+  function speakProblem(force) {
+    var st = App.state, fault = st.lastFault || { code: 'idle' }, sim = st.sim;
+    var text;
+    if (fault.code === 'ok') {
+      text = st.running
+        ? '现在电路是通的，电流正在跑。' + plainText(doctorFor(fault, sim))
+        : '电路连好啦，还没有通电。按右上角的通电试试，就能看到电流跑起来。';
+    } else {
+      text = '我来看看哪里有问题。' + plainText(doctorFor(fault, sim));
+    }
+    if (force) speak(text);
+    else speakAuto(text);
+  }
+  function autoProblemVoice(fault, sim) {
+    var st = App.state;
+    var code = fault ? fault.code : 'idle';
+    var key = code + '|' + (fault && fault.partId ? fault.partId : '') + '|' + (fault && fault.term ? fault.term : '') +
+      '|' + st.running + '|' + st.parts.length + '|' + st.wires.length;
+    if (key === lastProblemCode) return;
+    lastProblemCode = key;
+    if (!st.parts.length || st.exploding) return;
+    if (code === 'ok' && !st.running) return;
+    if (code === 'idle') return;
+    /* 等小朋友停一下再说，避免拖动时一直念 */
+    if (autoProblemTimer) clearTimeout(autoProblemTimer);
+    autoProblemTimer = setTimeout(function () {
+      autoProblemTimer = null;
+      if (App.state.exploding) return;
+      speakProblem(false);
+    }, 1400);
+  }
   function hasActive(sim, type) {
     return App.state.parts.some(function (p) {
       var info = sim && sim.parts[p.id];
@@ -362,12 +516,18 @@
   function updatePanels() {
     var st = App.state, fault = st.lastFault || { code: 'idle' }, sim = st.sim;
     st.statusText = st.statusText || '';
-    el.statusText.textContent = statusTextFor(fault, st.running);
+    var statusText = statusTextFor(fault, st.running);
+    el.statusText.textContent = statusText;
+    el.statusPill.setAttribute('data-speak', '状态：' + statusText + '。点我听一听哪里有问题。');
+    el.statusPill.title = '点我听一听哪里有问题';
     var activeCount = st.parts.filter(function (p) { var i = sim && sim.parts[p.id]; return i && Math.abs(i.current) > 0.001; }).length;
     el.statusExtra.textContent = st.running && sim
       ? activeCount + ' 个零件在工作 · ' + App.formatCurrent(sim.totalCurrent)
       : (st.parts.length ? st.parts.length + ' 个零件 · ' + st.wires.length + ' 根电线' : '');
-    el.doctorBubble.innerHTML = doctorFor(fault, sim);
+    var doctorHtml = doctorFor(fault, sim);
+    el.doctorBubble.innerHTML = doctorHtml;
+    el.doctorBubble.setAttribute('data-speak', plainText(doctorHtml));
+    el.doctorBubble.title = '点我听小电说一遍';
 
     var cur = sim ? sim.totalCurrent : 0;
     el.meterValue.textContent = App.formatCurrent(cur);
@@ -378,13 +538,22 @@
       : (fault.code === 'short' ? '短路很危险，断电检查一下吧' : '还没通电，电流在睡觉');
     renderTasks();
     renderInspector();
+    autoProblemVoice(fault, sim);
   }
   function renderTasks() {
     if (!el.taskList) return;
     el.taskList.innerHTML = App.TASKS.map(function (t) {
       var done = App.state.achieved.indexOf(t.id) >= 0;
-      return '<div class="task' + (done ? ' done' : '') + '"><span class="check">✓</span><span>' + t.icon + ' ' + t.label + '</span></div>';
+      return '<div class="task' + (done ? ' done' : '') + '" data-speak="' +
+        (done ? '已完成：' : '还没完成：') + t.label + '。' + (t.hint || '') + '">' +
+        '<span class="check">✓</span><span>' + t.icon + ' ' + t.label + '</span></div>';
     }).join('');
+    Array.prototype.forEach.call(el.taskList.querySelectorAll('.task'), function (n) {
+      on(n, 'click', function () {
+        var text = n.getAttribute('data-speak') || n.textContent;
+        speak(text);
+      });
+    });
   }
 
   /* ---------- 选中零件面板 ---------- */
@@ -402,16 +571,21 @@
       body.innerHTML =
         '<div class="inspect-title">🪢 电线</div>' +
         '<p class="inspect-desc">把两个零件连起来，电流才能通过。</p>' +
+        '<p class="inspect-more">' + descFor('wire') + '</p>' +
         '<div class="readout">' + (info ? '<span>电流 <b>' + App.formatCurrent(info.current) + '</b></span>' : '') + '</div>' +
-        '<button class="btn small danger" id="insDel">🗑️ 删掉这根电线</button>';
+        '<div class="inspect-actions">' +
+        '<button class="btn small" id="insSay">🔊 听讲解</button>' +
+        '<button class="btn small danger" id="insDel">🗑️ 删掉这根电线</button></div>';
       on($('insDel'), 'click', function () { App.deleteSelection(); });
+      on($('insSay'), 'click', function () { explainType('wire'); });
       return;
     }
     var part = App.byId(sel.id);
     if (!part) { body.innerHTML = '<p class="muted">这个零件已经不在啦。</p>'; return; }
     var def = PARTS[part.type], info2 = infoFor(part.id);
     var html = '<div class="inspect-title">' + iconFor(part.type) + ' ' + def.name + '</div>' +
-      '<p class="inspect-desc">' + descFor(part.type) + '</p>';
+      '<p class="inspect-desc">' + descFor(part.type) + '</p>' +
+      '<p class="inspect-more">' + (guideOf(part.type) ? guideOf(part.type).tip : '') + '</p>';
     if (info2) {
       html += '<div class="readout"><span>电流 <b>' + App.formatCurrent(info2.current) + '</b></span>' +
         '<span>电压 <b>' + Math.abs(info2.vdrop).toFixed(2) + ' V</b></span>' +
@@ -435,9 +609,12 @@
     } else if (part.type === 'breadboard') {
       html += '<div class="readout"><span>红色 + 轨左右相通</span><span>蓝色 − 轨左右相通</span></div>';
     }
-    html += '<button class="btn small danger" id="insDel">🗑️ 删掉这个零件</button>';
+    html += '<div class="inspect-actions">' +
+      '<button class="btn small" id="insSay">🔊 听讲解</button>' +
+      '<button class="btn small danger" id="insDel">🗑️ 删掉这个零件</button></div>';
     body.innerHTML = html;
     on($('insDel'), 'click', function () { App.deleteSelection(); });
+    on($('insSay'), 'click', function () { explainPart(part); });
     var sw = $('swToggle');
     if (sw) on(sw, 'click', function () { toggleSwitch(part); });
     Array.prototype.forEach.call(body.querySelectorAll('[data-voltage]'), function (b) {
@@ -455,12 +632,16 @@
     part.props[key] = value;
     App.afterChange();
     App.audio.click();
+    if (key === 'voltage') speak('电池改成' + value + '伏。');
+    else if (key === 'resistance') speak('电阻改成' + App.fmtRes(value) + '。');
+    else if (key === 'color') speak('LED 换颜色啦。');
   }
   function toggleSwitch(part) {
     App.pushHistory();
     part.props.closed = !part.props.closed;
     App.afterChange();
     App.audio.click();
+    speak(part.props.closed ? '开关合上啦，电流可以通过。' : '开关断开啦，电流过不去。');
     renderInspector();
   }
   function iconFor(type) {
@@ -477,7 +658,8 @@
       buzzer: '电流让里面的纸盆振动，就发出声音啦。',
       diode: '电流的单向门，只允许电流从三角形尖尖的方向通过。',
       motor: '电流通过线圈产生磁力，电机就转起来了。',
-      breadboard: '面包板上的红色 + 轨和蓝色 − 轨，左右两边是相通的，可以分电。'
+      breadboard: '面包板上的红色 + 轨和蓝色 − 轨，左右两边是相通的，可以分电。',
+      wire: '电流的小马路。把两个零件的接线点连起来，电流才能通过。'
     };
     return map[type] || '';
   }
@@ -494,6 +676,19 @@
   function updateSound() {
     el.btnSound.querySelector('span').textContent = App.state.sound ? '🔊' : '🔇';
     el.btnSound.setAttribute('aria-pressed', App.state.sound ? 'true' : 'false');
+  }
+  function updateVoice() {
+    if (!el.btnVoice) return;
+    var supported = global.Voice && Voice.supported();
+    var on = supported && Voice.state.enabled;
+    el.btnVoice.classList.toggle('off', !on);
+    el.btnVoice.querySelector('span').textContent = on ? '🔈' : '🔇';
+    if (el.voiceText) el.voiceText.textContent = supported ? (on ? '朗读' : '静音') : '不支持';
+    el.btnVoice.setAttribute('aria-pressed', on ? 'true' : 'false');
+    el.btnVoice.title = supported
+      ? (on ? '中文朗读已打开，点一下关闭' : '中文朗读已关闭，点一下打开')
+      : '这个浏览器不支持语音朗读';
+    if (!supported) el.btnVoice.disabled = true;
   }
   function updateUndo() { el.btnUndo.disabled = !App.state.past.length; }
 
@@ -541,6 +736,7 @@
     html += '<div class="boom-label">💥 砰！短路啦！</div>';
     boom.innerHTML = html;
     el.effectsLayer.appendChild(boom);
+    speak('砰！短路啦！电线把电池的正极和负极直接连起来了。电流走了没有障碍的近路。');
     var canvas = el.boardCanvas;
     canvas.classList.add('shake');
     var batEl = el.partsLayer.querySelector('.part[data-type="battery"]');
@@ -553,22 +749,30 @@
   }
 
   /* ---------- 弹窗 ---------- */
-  function openModal(html) {
-    el.modalCard.innerHTML = '<button class="modal-close" title="关闭">✕</button>' + html;
+  function openModal(html, speakText) {
+    el.modalCard.innerHTML = '<button class="modal-close" title="关闭" data-nospeak>✕</button>' + html;
     el.modalRoot.hidden = false;
+    if (speakText) speak(speakText);
   }
-  function closeModal() { el.modalRoot.hidden = true; el.modalCard.innerHTML = ''; }
+  function closeModal() {
+    el.modalRoot.hidden = true;
+    el.modalCard.innerHTML = '';
+    if (global.Voice) Voice.cancel();
+  }
   function showHelp() {
     openModal(
-      '<h2>怎么玩？</h2><p class="sub">给小朋友和大朋友的操作说明</p>' +
+      '<h2>怎么玩？</h2><p class="sub">给小朋友和大朋友的操作说明。点每一行，可以用中文念出来。</p>' +
       '<div class="help-list">' +
-      '<div class="help-item"><span class="n">1</span><p><b>放进零件：</b>从左边零件箱拖到工作台，或者点一下零件，它会自己跳进去。</p></div>' +
-      '<div class="help-item"><span class="n">2</span><p><b>连电线：</b>点零件上的小圆点，再点另一个小圆点，就连好一根电线。（点「电线」按钮会提示所有接线点）</p></div>' +
-      '<div class="help-item"><span class="n">3</span><p><b>通电：</b>按右上角<b>「通电试试」</b>，电线里会出现流动的小电流，LED、灯泡、电机、喇叭都会工作。</p></div>' +
-      '<div class="help-item"><span class="n">4</span><p><b>修改和删除：</b>拖动零件可以搬家；选中零件后点 🗑️ 删除；点一下<b>电线</b>，中间会出现 <b>✕</b>，再点它就可以删掉这根电线；按「撤销」都能找回。</p></div>' +
-      '<div class="help-item"><span class="n">5</span><p><b>小心短路：</b>电线不能直接把电池的 + 和 − 连起来！要在中间放一个灯泡、电阻、电机或喇叭，不然会💥爆炸。</p></div>' +
-      '<div class="help-item"><span class="n">6</span><p><b>认一认：</b>电池提供电；电阻像减速带；LED 长脚接 +；二极管是单向门；面包板的 + 轨和 − 轨左右相通。</p></div>' +
-      '</div>');
+      '<div class="help-item" data-speak="第一步，放进零件。从左边零件箱拖到工作台，或者点一下零件，它会自己跳进去。"><span class="n">1</span><p><b>放进零件：</b>从左边零件箱拖到工作台，或者点一下零件，它会自己跳进去。点零件箱上的小问号，可以听它是做什么的。</p></div>' +
+      '<div class="help-item" data-speak="第二步，连电线。点零件上的小圆点，再点另一个小圆点，就连好一根电线。点电线按钮，会提示所有接线点。"><span class="n">2</span><p><b>连电线：</b>点零件上的小圆点，再点另一个小圆点，就连好一根电线。（点「电线」按钮会提示所有接线点）</p></div>' +
+      '<div class="help-item" data-speak="第三步，通电。按右上角通电试试，电线里会出现流动的小电流，LED、灯泡、电机、喇叭都会工作。"><span class="n">3</span><p><b>通电：</b>按右上角<b>「通电试试」</b>，电线里会出现流动的小电流，LED、灯泡、电机、喇叭都会工作。</p></div>' +
+      '<div class="help-item" data-speak="第四步，修改和删除。拖动零件可以搬家。选中零件后点垃圾桶删除。点一下电线，中间会出现叉叉，再点它就可以删掉这根电线。按撤销都能找回。"><span class="n">4</span><p><b>修改和删除：</b>拖动零件可以搬家；选中零件后点 🗑️ 删除；点一下<b>电线</b>，中间会出现 <b>✕</b>，再点它就可以删掉这根电线；按「撤销」都能找回。</p></div>' +
+      '<div class="help-item" data-speak="第五步，小心短路。电线不能直接把电池的正极和负极连起来。要在中间放一个灯泡、电阻、电机或者喇叭，不然会爆炸。"><span class="n">5</span><p><b>小心短路：</b>电线不能直接把电池的 + 和 − 连起来！要在中间放一个灯泡、电阻、电机或喇叭，不然会💥爆炸。</p></div>' +
+      '<div class="help-item" data-speak="第六步，认一认零件。电池提供电，电阻像减速带，LED 长脚接正极，二极管是单向门，面包板的正极轨和负极轨左右相通。"><span class="n">6</span><p><b>认一认：</b>电池提供电；电阻像减速带；LED 长脚接 +；二极管是单向门；面包板的 + 轨和 − 轨左右相通。</p></div>' +
+      '<div class="help-item" data-speak="第七步，听中文讲解。点任何一个零件，都会用中文告诉你它是干什么的。右边的小电会提示哪里有问题，点听问题按钮可以再听一遍。"><span class="n">7</span><p><b>听中文讲解：</b>点任何一个零件，都会用中文告诉你它是干什么的。右边的小电会提示哪里有问题，点「听问题」可以再听一遍。顶部的「朗读」按钮可以开关全站发音。</p></div>' +
+      '</div>',
+      '怎么玩？这里是给小朋友和大朋友的操作说明。点每一行，我都可以念给你听。'
+    );
   }
   function showExamples() {
     openModal(
@@ -576,10 +780,13 @@
       '<div class="example-grid">' +
       Object.keys(App.PRESETS).map(function (id) {
         var p = App.PRESETS[id];
-        return '<button class="example' + (p.danger ? ' danger' : '') + '" data-preset="' + id + '">' +
+        return '<button class="example' + (p.danger ? ' danger' : '') + '" data-preset="' + id + '" data-speak="' +
+          p.name + '。' + p.desc + ' ' + (p.note || '') + '">' +
           '<span class="ex-icon">' + p.icon + '</span><b>' + p.name + '</b><span>' + p.desc + '</span></button>';
       }).join('') +
-      '</div>');
+      '</div>',
+      '这里有几个示例电路。点一个，看看它是怎么工作的。'
+    );
     Array.prototype.forEach.call(el.modalCard.querySelectorAll('[data-preset]'), function (b) {
       on(b, 'click', function () { App.loadPreset(b.dataset.preset); closeModal(); });
     });
@@ -591,6 +798,7 @@
     t.className = 'toast' + (type ? ' ' + type : '');
     t.textContent = msg;
     el.toastRoot.appendChild(t);
+    speak(msg, { auto: true });
     setTimeout(function () { t.classList.add('out'); }, 2200);
     setTimeout(function () { t.remove(); }, 2550);
   }
@@ -601,9 +809,10 @@
     refreshFromSim: refreshFromSim, select: select,
     updatePanels: updatePanels, renderTasks: renderTasks, renderInspector: renderInspector,
     updateRunButton: updateRunButton, setPowered: setPowered, setAlarm: setAlarm,
-    updateSound: updateSound, updateUndo: updateUndo,
+    updateSound: updateSound, updateVoice: updateVoice, updateUndo: updateUndo,
     applyZoom: applyZoom, playBoom: playBoom,
     openModal: openModal, closeModal: closeModal, toast: toast,
+    speak: speak, speakProblem: speakProblem, explainType: explainType, explainPart: explainPart,
     partEls: partEls
   };
 })(window);

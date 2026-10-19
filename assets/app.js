@@ -87,6 +87,7 @@
     restore(state.past.pop());
     if (state.running) stopRun();
     UI.renderAll(); evaluate(); commit(); UI.toast('撤销啦 ↩️');
+    UI.speak('撤销啦。');
   }
   function commit() {
     try { localStorage.setItem(STORAGE_KEY, snapshot()); } catch (e) {}
@@ -110,6 +111,9 @@
     var p = makePart(type, x, y, props);
     state.selection = { kind: 'part', id: p.id };
     afterChange();
+    var def = PARTS[type];
+    var g = global.PART_GUIDES && PART_GUIDES[type];
+    if (g) UI.speak(def.name + '放好啦。' + g.what);
     return p;
   }
   function findWire(a, b) {
@@ -127,6 +131,7 @@
     state.wires.push(w);
     state.selection = { kind: 'wire', id: w.id };
     afterChange();
+    UI.speak('电线接好啦。');
     return w;
   }
   function deleteSelection() {
@@ -142,6 +147,7 @@
     state.selection = null;
     afterChange();
     UI.toast('删掉啦，按「撤销」可以找回来');
+    UI.speak(sel.kind === 'part' ? '零件删掉啦。按撤销可以找回来。' : '电线删掉啦。按撤销可以找回来。');
   }
   function deletePart(id) {
     state.selection = { kind: 'part', id: id };
@@ -155,6 +161,7 @@
     state.achieved = [];
     afterChange();
     UI.toast('清空啦，按「撤销」可以找回来');
+    UI.speak('工作台清空啦。按撤销可以找回来。');
   }
   function duplicateProps(p) { return JSON.parse(JSON.stringify(p.props)); }
 
@@ -177,34 +184,110 @@
     audio.click();
     setRunUI(true);
     evaluate();
+    if (state.lastFault && state.lastFault.code === 'ok') {
+      UI.speak('通电啦！' + (state.presetNote || '看看电流有没有跑起来。'));
+    } else {
+      UI.speak('通电试试。咦，我来帮你看看哪里有问题。');
+    }
   }
   function stopRun() {
     if (state.shortTimer) { clearTimeout(state.shortTimer); state.shortTimer = null; }
     setRunUI(false);
     UI.refreshFromSim();
     UI.updatePanels();
+    UI.speak('断电啦。');
   }
   function toggleRun() { state.running ? stopRun() : startRun(); }
 
   /* ---------- 分析电路 ---------- */
   function pointInfo(sim, partId) { return sim && sim.parts[partId]; }
+  function termLabel(part, termId) {
+    var def = PARTS[part.type];
+    var t = def && def.terms ? def.terms.find(function (x) { return x.id === termId; }) : null;
+    if (!t) return '接线点';
+    if (t.label === '+') return '正极';
+    if (t.label === '−' || t.label === '-') return '负极';
+    return '接线点';
+  }
+  function wireCountAt(partId, termId) {
+    return state.wires.filter(function (w) {
+      return (w.a.part === partId && w.a.term === termId) || (w.b.part === partId && w.b.term === termId);
+    }).length;
+  }
   function diagnose(sim) {
     var hasBattery = state.parts.some(function (p) { return p.type === 'battery'; });
-    if (!hasBattery) return { code: 'no-battery' };
-    if (sim && sim.short) return { code: 'short' };
-    if (sim && sim.totalCurrent > 0.0006) return { code: 'ok' };
+    if (!hasBattery) {
+      return {
+        code: 'no-battery',
+        message: '还没有电池。先放一节电池吧，它是电流小火车的发动机。'
+      };
+    }
+    if (sim && sim.short) {
+      var w = null;
+      if (sim.maxWire) {
+        var wid = sim.maxWire.id;
+        w = state.wires.find(function (q) { return q.id === wid; });
+      }
+      var bat = state.parts.find(function (p) { return p.type === 'battery'; });
+      return {
+        code: 'short', wireId: w ? w.id : null, partId: bat ? bat.id : null,
+        message: '短路啦！有一根电线直接把电池的正极和负极连起来了。快把中间的电线拿掉，或者在中间加一个灯泡、电阻、电机、喇叭。'
+      };
+    }
+    if (sim && sim.totalCurrent > 0.0006) {
+      var hotLed = state.parts.find(function (p) {
+        var info = sim.parts[p.id];
+        return p.type === 'led' && info && info.current > 0.035 && !info.reversed;
+      });
+      if (hotLed) {
+        return {
+          code: 'no-resistor', partId: hotLed.id,
+          message: 'LED 的电流太大了！它没有电阻保护，很容易烧坏。请串一个电阻再通电。'
+        };
+      }
+      return { code: 'ok' };
+    }
     var i, p;
     for (i = 0; i < state.parts.length; i++) {
       p = state.parts[i];
-      if (p.type === 'switch' && !p.props.closed) return { code: 'open-switch', partId: p.id };
+      if (p.type === 'switch' && !p.props.closed) {
+        return {
+          code: 'open-switch', partId: p.id,
+          message: '开关断开了，电流过不去。点一下开关，让它合上。'
+        };
+      }
     }
     for (i = 0; i < state.parts.length; i++) {
       p = state.parts[i];
       if (p.type !== 'led' && p.type !== 'diode') continue;
       var info = pointInfo(sim, p.id);
-      if (info && info.reversed) return { code: 'reversed', partId: p.id, type: p.type };
+      if (info && info.reversed) {
+        return {
+          code: 'reversed', partId: p.id, type: p.type,
+          message: p.type === 'led'
+            ? 'LED 接反了。长脚是正极，要接电池正极那一边；短脚接负极。'
+            : '二极管接反了。电流只能从三角形尖尖的方向过去，把它转个方向吧。'
+        };
+      }
     }
-    return { code: 'open' };
+    /* 找出还没接电线的接线点，告诉小朋友问题在哪里 */
+    for (i = 0; i < state.parts.length; i++) {
+      p = state.parts[i];
+      var def = PARTS[p.type];
+      for (var j = 0; j < def.terms.length; j++) {
+        var t = def.terms[j];
+        if (wireCountAt(p.id, t.id) === 0) {
+          return {
+            code: 'loose', partId: p.id, term: t.id,
+            message: '「' + def.name + '」的' + termLabel(p, t.id) + '还没有接电线。点这个小圆点，再点另一个小圆点，把它连起来。'
+          };
+        }
+      }
+    }
+    return {
+      code: 'open',
+      message: '电路还没连成一个圈。检查一下：是不是每个小圆点都接上电线啦？电流要从电池正极出发，绕一圈回到负极。'
+    };
   }
 
   function evaluate() {
@@ -254,10 +337,10 @@
 
   /* ---------- 小挑战 ---------- */
   var TASKS = [
-    { id: 'led', icon: '💡', label: '点亮 LED 灯', type: 'led' },
-    { id: 'lamp', icon: '🔆', label: '点亮小灯泡', type: 'lamp' },
-    { id: 'motor', icon: '🌀', label: '让电机转起来', type: 'motor' },
-    { id: 'buzzer', icon: '🔊', label: '让喇叭唱起歌', type: 'buzzer' }
+    { id: 'led', icon: '💡', label: '点亮 LED 灯', type: 'led', hint: '放一个电池、一个电阻和一个 LED，连成一个圈，再通电。' },
+    { id: 'lamp', icon: '🔆', label: '点亮小灯泡', type: 'lamp', hint: '电池、开关和小灯泡连成一个圈，按通电试试。' },
+    { id: 'motor', icon: '🌀', label: '让电机转起来', type: 'motor', hint: '把电机接在电池和开关中间，通电后它就会转。' },
+    { id: 'buzzer', icon: '🔊', label: '让喇叭唱起歌', type: 'buzzer', hint: '把喇叭接进电路，通电后它会发出声音。' }
   ];
   function checkTasks(sim) {
     TASKS.forEach(function (t) {
@@ -272,6 +355,7 @@
         audio.chime();
         UI.renderTasks();
         commit();
+        UI.speak('太棒了！' + t.label + '，完成啦。');
       }
     });
   }
@@ -409,12 +493,16 @@
     evaluate();
     commit();
     UI.renderTasks();
-    if (!silent) UI.toast('已加载示例：' + preset.name + '（撤销可恢复）', 'good');
+    if (!silent) {
+      UI.toast('已加载示例：' + preset.name + '（撤销可恢复）', 'good');
+      UI.speak('加载示例：' + preset.name + '。' + preset.desc + ' ' + preset.note);
+    }
   }
 
   /* ---------- 初始化 ---------- */
   function init() {
     try { var s = localStorage.getItem(SOUND_KEY); if (s === 'off') state.sound = false; } catch (e) {}
+    if (global.Voice) Voice.init();
     UI.init();
     var loaded = false;
     try {
@@ -432,7 +520,18 @@
     if (!loaded) loadPreset('led', true);
     else { UI.renderAll(); evaluate(); }
     UI.updateSound();
+    UI.updateVoice();
     UI.updateUndo();
+    /* 首次进入，等用户点过页面后，用中文打个招呼并读一下玩法 */
+    var greet = function () {
+      document.removeEventListener('pointerdown', greet, true);
+      document.removeEventListener('keydown', greet, true);
+      setTimeout(function () {
+        UI.speak('欢迎来到小小电路城。点一个零件，我就告诉你它是做什么的。右上角可以通电试试。');
+      }, 260);
+    };
+    document.addEventListener('pointerdown', greet, true);
+    document.addEventListener('keydown', greet, true);
   }
 
   global.App = {
@@ -443,7 +542,7 @@
     pushHistory: pushHistory, undo: undo, commit: commit,
     makePart: makePart, addPart: addPart, createWire: createWire, findWire: findWire,
     deleteSelection: deleteSelection, deletePart: deletePart, clearBoard: clearBoard,
-    afterChange: afterChange, evaluate: evaluate, diagnose: diagnose,
+    afterChange: afterChange, evaluate: evaluate, diagnose: diagnose, termLabel: termLabel,
     startRun: startRun, stopRun: stopRun, toggleRun: toggleRun, setRunUI: setRunUI,
     loadPreset: loadPreset, audio: audio, init: init,
     duplicateProps: duplicateProps

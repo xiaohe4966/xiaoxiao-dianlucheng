@@ -16,17 +16,18 @@
       <div class="brand-badge" aria-hidden="true">
         <svg viewBox="0 0 64 64"><path d="M36 6 15 37h13l-4 21 22-33H33z" fill="#22314a" stroke="#22314a" stroke-width="3" stroke-linejoin="round"/></svg>
       </div>
-      <div class="brand-text">
+      <div class="brand-text" data-speak="小小电路城。拖一拖，连一连，通电啦。点零件可以听中文讲解。">
         <h1>小小电路城</h1>
         <p>拖一拖 · 连一连 · 通电啦</p>
       </div>
     </div>
     <div class="top-actions">
-      <button class="btn ghost" id="btnExamples" type="button"><span aria-hidden="true">📚</span><span class="hide-sm">示例</span></button>
+      <button class="btn ghost" id="btnExamples" type="button" title="示例电路"><span aria-hidden="true">📚</span><span class="hide-sm">示例</span></button>
       <button class="btn ghost" id="btnUndo" type="button" title="撤销 (Ctrl+Z)"><span aria-hidden="true">↩️</span><span class="hide-sm">撤销</span></button>
-      <button class="btn ghost" id="btnClear" type="button"><span aria-hidden="true">🧹</span><span class="hide-sm">清空</span></button>
-      <button class="btn ghost" id="btnHelp" type="button"><span aria-hidden="true">❓</span><span class="hide-sm">玩法</span></button>
-      <button class="btn ghost" id="btnSound" type="button" aria-pressed="true"><span aria-hidden="true">🔊</span><span class="hide-sm">声音</span></button>
+      <button class="btn ghost" id="btnClear" type="button" title="清空工作台"><span aria-hidden="true">🧹</span><span class="hide-sm">清空</span></button>
+      <button class="btn ghost" id="btnHelp" type="button" title="怎么玩"><span aria-hidden="true">❓</span><span class="hide-sm">玩法</span></button>
+      <button class="btn ghost" id="btnSound" type="button" aria-pressed="true" title="音效开关"><span aria-hidden="true">🔊</span><span class="hide-sm">声音</span></button>
+      <button class="btn ghost voice-btn" id="btnVoice" type="button" aria-pressed="true" title="中文朗读开关" data-nospeak><span aria-hidden="true">🔈</span><span class="hide-sm" id="voiceText">朗读</span></button>
       <button class="btn run" id="btnRun" type="button"><span class="run-ico" aria-hidden="true">▶</span><span id="runText">通电试试</span></button>
     </div>
   </header>
@@ -35,20 +36,20 @@
 
     <aside class="panel palette">
       <div class="panel-head">
-        <h2>🧰 零件箱</h2>
+        <h2 data-speak="零件箱。拖到工作台，或者点一下放进去。点每个零件旁边的小问号，可以听它的小讲解。">🧰 零件箱</h2>
         <p>拖到工作台，或者点一下放进去</p>
       </div>
       <div class="parts-grid" id="partsGrid"></div>
-      <div class="palette-tip">💡 电流要跑回电池另一头，才算一个完整的圈。</div>
+      <div class="palette-tip" data-speak="小提示：电流要跑回电池另一头，才算一个完整的圈。">💡 电流要跑回电池另一头，才算一个完整的圈。</div>
     </aside>
 
     <section class="board-panel" id="boardPanel">
       <div class="board-toolbar">
-        <div class="board-title">🔌 电路工作台</div>
+        <div class="board-title" data-speak="电路工作台。把零件放在这里，再用小圆点连电线。">🔌 电路工作台</div>
         <div class="board-tools">
-          <button type="button" id="zoomOut" title="缩小">−</button>
-          <button type="button" id="zoomFit" title="适应窗口">适应</button>
-          <button type="button" id="zoomIn" title="放大">＋</button>
+          <button type="button" id="zoomOut" title="缩小" data-speak="缩小">−</button>
+          <button type="button" id="zoomFit" title="适应窗口" data-speak="适应窗口">适应</button>
+          <button type="button" id="zoomIn" title="放大" data-speak="放大">＋</button>
         </div>
       </div>
       <div class="board-canvas" id="boardCanvas">
@@ -65,8 +66,9 @@
         </div>
       </div>
       <div class="board-status">
-        <div class="status-pill" id="statusPill"><span class="status-dot"></span><span id="statusText">点右上角「通电试试」</span></div>
+        <div class="status-pill" id="statusPill" data-speak=""><span class="status-dot"></span><span id="statusText">点右上角「通电试试」</span></div>
         <div class="status-extra" id="statusExtra"></div>
+        <button class="btn ghost tiny" id="btnHearProblem" type="button" title="听一听哪里有问题" data-nospeak>🔊 听问题</button>
       </div>
     </section>
 
@@ -80,24 +82,25 @@
               <path d="M31 34q5 5 10 0" fill="none" stroke="#22314a" stroke-width="2.6" stroke-linecap="round"/>
             </svg>
           </div>
-          <div class="bubble" id="doctorBubble">我是小电！先看看示例，再按右上角「通电试试」吧。</div>
+          <div class="bubble" id="doctorBubble" data-speak="我是小电！先看看示例，再按右上角通电试试吧。">我是小电！先看看示例，再按右上角「通电试试」吧。</div>
         </div>
+        <button class="btn ghost tiny doctor-listen" id="btnListenDoctor" type="button" data-nospeak>🔊 让小电说一遍</button>
       </section>
 
       <section class="card meter">
-        <h3>⚡ 电流表</h3>
+        <h3 data-speak="电流表。显示现在有多少电流在跑。">⚡ 电流表</h3>
         <div class="meter-value" id="meterValue">0 mA</div>
         <div class="meter-bar"><i id="meterBar"></i></div>
         <div class="meter-note" id="meterNote">还没通电，电流在睡觉</div>
       </section>
 
       <section class="card tasks">
-        <h3>🎯 小挑战</h3>
+        <h3 data-speak="小挑战。完成四个小任务，会有提示音。">🎯 小挑战</h3>
         <div class="task-list" id="taskList"></div>
       </section>
 
       <section class="card inspect" id="inspectCard">
-        <h3>🔍 选中的零件</h3>
+        <h3 data-speak="选中的零件。点零件或者电线，就能看到它的小秘密。">🔍 选中的零件</h3>
         <div class="inspect-body" id="inspectBody"><p class="muted">点一个零件或一根电线，就能在这里看到它的小秘密。</p></div>
       </section>
     </aside>
@@ -111,6 +114,7 @@
 </div>
 <div class="toast-root" id="toastRoot" aria-live="polite"></div>
 
+<script src="assets/voice.js"></script>
 <script src="assets/sim.js"></script>
 <script src="assets/parts.js"></script>
 <script src="assets/ui.js"></script>
