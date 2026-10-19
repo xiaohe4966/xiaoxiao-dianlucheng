@@ -10,15 +10,6 @@
     return { x: (cx - r.left) / s, y: (cy - r.top) / s };
   }
   function dist(ax, ay, bx, by) { return Math.sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by)); }
-  function pathD(p1, p2) {
-    var dx = p2.x - p1.x, dy = p2.y - p1.y;
-    var len = Math.sqrt(dx * dx + dy * dy) || 1;
-    var nx = -dy / len, ny = dx / len;
-    if (ny < 0) { nx = -nx; ny = -ny; }
-    var sag = Math.max(18, Math.min(200, len * 0.28));
-    var mx = (p1.x + p2.x) / 2 + nx * sag, my = (p1.y + p2.y) / 2 + ny * sag;
-    return 'M ' + p1.x + ' ' + p1.y + ' Q ' + Math.round(mx) + ' ' + Math.round(my) + ' ' + p2.x + ' ' + p2.y;
-  }
 
   function init() {
     global.addEventListener('pointermove', onMove, { passive: false });
@@ -122,7 +113,9 @@
     var pa = App.byId(from.part);
     if (!pa) return;
     var p1 = App.termPos(pa, from.term);
-    UI.el.previewGroup.innerHTML = '<path class="preview-path" d="' + pathD(p1, to) + '"/>';
+    var skip = {}; skip[from.part] = 1;
+    var d = UI.pathD(p1, to, UI.wireObstacles(skip));
+    UI.el.previewGroup.innerHTML = '<path class="preview-path" d="' + d + '"/>';
   }
   function toggleWireMode(chip) {
     var on = !App.state.wireMode;

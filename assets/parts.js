@@ -105,7 +105,10 @@
     resistor: {
       name: '电阻', short: '电阻', w: 150, h: 58,
       terms: [{ id: 'a', x: 10, y: 30 }, { id: 'b', x: 140, y: 30 }],
-      model: function (p) { return { kind: 'resistor', a: 'a', b: 'b', r: p.props.resistance || 100 }; },
+      model: function (p) {
+        var r = Number(p.props.resistance);
+        return { kind: 'resistor', a: 'a', b: 'b', r: r > 0 ? r : 100 };
+      },
       spec: {
         maxW: 0.25,
         text: function (p) { return fmtR(p.props.resistance) + ' · 额定功率 1/4W'; }
@@ -354,6 +357,7 @@
 
   function fmtR(v) {
     v = Number(v) || 0;
+    if (v >= 1000000) return (v / 1000000) + 'MΩ';
     if (v >= 1000) return (v / 1000) + 'kΩ';
     return v + 'Ω';
   }
@@ -406,12 +410,12 @@
     },
     resistor: {
       what: '电阻是电流的减速带。它把电流变小，保护 LED 不被烧坏。',
-      how: '电阻没有方向，随便哪一头接一边，通常和 LED 手拉手串在一起。',
-      tip: '100 欧姆电流大，1 千欧电流小。真实的电阻能承受的功率是 1/4 瓦，电流太大它会发烫、冒烟，然后烧坏。'
+      how: '电阻没有方向，随便哪一头接一边，通常和 LED 手拉手串在一起。点中它，还能自己填一个阻值。',
+      tip: '100 欧姆电流大，1 千欧电流小。点中电阻，在面板里可以直接输入想要的阻值（1 欧姆到 1 兆欧）。真实的电阻能承受的功率是 1/4 瓦，电流太大它会发烫、冒烟，然后烧坏。'
     },
     pot: {
       what: '可变电阻是一个能拧大拧小的减速带。电阻变小，电流变大，灯就更亮。',
-      how: '两个接线柱接在电路里。点住它，再拖动滑块，就能改变电阻的大小。',
+      how: '两个接线柱接在电路里。点住它，再拖动滑块，就能改变电阻的大小：最小 0 欧姆，最大 1 千欧。',
       tip: '把它和 LED 手拉手串在一起，就变成能调亮度的台灯啦。它最大 1000 欧姆，能承受 1/4 瓦，电阻调得太小、电流太大，它也会发烫烧坏。'
     },
     led: {

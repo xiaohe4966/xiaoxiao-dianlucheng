@@ -303,7 +303,8 @@
       var hot = (running || App.state.exploding) && Math.abs(cur) > CircuitSim.SHORT_A;
       var p1 = ends[0], p2 = ends[1], tmp;
       if (running && cur < -0.0008) { tmp = p1; p1 = p2; p2 = tmp; }
-      var d = pathD(p1, p2);
+      var skip = {}; skip[w.a.part] = 1; skip[w.b.part] = 1;
+      var d = pathD(p1, p2, wireObstacles(skip));
       var dots = '';
       var g = '<g class="wire ' + (active ? 'active' : 'idle') + (hot ? ' hot' : '') +
         ((sel && sel.kind === 'wire' && sel.id === w.id) ? ' selected' : '') +
@@ -354,13 +355,66 @@
     });
   }
   function active0(info) { return Math.abs(info.current) > 0.0008; }
-  function pathD(p1, p2) {
+  /* 电线要绕开零件，不要从零件底下穿过去，不然看不清线路怎么走。
+     做法：从默认的「往下垂」开始，一点点加大下垂；再试往上拱。
+     哪条曲线穿过的零件最少就用哪条，0 分就是完美路线。 */
+  function wireObstacles(skip) {
+    var list = [];
+    App.state.parts.forEach(function (p) {
+      if (skip && skip[p.id]) return;
+      var def = PARTS[p.type]; if (!def) return;
+      list.push({ x1: p.x - 9, y1: p.y - 9, x2: p.x + def.w + 9, y2: p.y + def.h + 9 });
+    });
+    return list;
+  }
+  function curvePoints(p1, p2, mx, my) {
+    var pts = [], i, t, mt;
+    for (i = 1; i < 15; i++) {
+      t = i / 15; mt = 1 - t;
+      pts.push({
+        x: mt * mt * p1.x + 2 * mt * t * mx + t * t * p2.x,
+        y: mt * mt * p1.y + 2 * mt * t * my + t * t * p2.y
+      });
+    }
+    return pts;
+  }
+  /* 给曲线打分：穿过零件、跑出工作台都算「不好」，0 分就是完美路线 */
+  function curveScore(pts, rects) {
+    var score = 0;
+    for (var i = 0; i < pts.length; i++) {
+      var q = pts[i];
+      if (q.x < 8 || q.x > 1192 || q.y < 8 || q.y > 752) { score += 2; continue; }
+      for (var j = 0; j < rects.length; j++) {
+        var r = rects[j];
+        if (q.x > r.x1 && q.x < r.x2 && q.y > r.y1 && q.y < r.y2) { score++; break; }
+      }
+    }
+    return score;
+  }
+  function pathD(p1, p2, rects) {
     var dx = p2.x - p1.x, dy = p2.y - p1.y;
     var dist = Math.sqrt(dx * dx + dy * dy) || 1;
     var nx = -dy / dist, ny = dx / dist;
     if (ny < 0) { nx = -nx; ny = -ny; }
-    var sag = Math.max(18, Math.min(200, dist * 0.28));
-    var mx = (p1.x + p2.x) / 2 + nx * sag, my = (p1.y + p2.y) / 2 + ny * sag;
+    var base = Math.max(18, Math.min(200, dist * 0.28));
+    var cx = (p1.x + p2.x) / 2, cy = (p1.y + p2.y) / 2;
+    var mx = cx + nx * base, my = cy + ny * base;
+    if (rects && rects.length) {
+      var mults = [1, 1.5, 2, 2.7, 3.5, 4.5, 6];
+      var side, i, best = 1e9;
+      for (side = 0; side < 2; side++) {
+        var sign = side === 0 ? 1 : -1;      /* 先往下垂，再试往上拱 */
+        for (i = 0; i < mults.length; i++) {
+          var sag = base * mults[i];
+          var tx = cx + nx * sag * sign, ty = cy + ny * sag * sign;
+          var sc = curveScore(curvePoints(p1, p2, tx, ty), rects);
+          if (sc < best) { best = sc; mx = tx; my = ty; }
+          if (!best) break;
+        }
+        if (!best) break;
+      }
+      /* 实在绕不开（比如零件围成一圈），就用「挡住最少」的那条曲线 */
+    }
     return 'M ' + r1(p1.x) + ' ' + r1(p1.y) + ' Q ' + r1(mx) + ' ' + r1(my) + ' ' + r1(p2.x) + ' ' + r1(p2.y);
   }
   function r1(v) { return Math.round(v * 10) / 10; }
@@ -754,9 +808,13 @@
         return '<button class="opt' + (part.props.voltage === v ? ' on' : '') + '" data-voltage="' + v + '">' + v + 'V</button>';
       }).join('') + '</div>';
     } else if (part.type === 'resistor') {
-      html += '<div class="opt-row">' + [100, 220, 1000].map(function (v) {
-        return '<button class="opt' + (part.props.resistance === v ? ' on' : '') + '" data-res="' + v + '">' + App.fmtRes(v) + '</button>';
-      }).join('') + '</div>';
+      var resNow = Number(part.props.resistance) || 100;
+      html += '<div class="opt-row">' + [10, 47, 100, 220, 1000].map(function (v) {
+        return '<button class="opt' + (resNow === v ? ' on' : '') + '" data-res="' + v + '">' + App.fmtRes(v) + '</button>';
+      }).join('') + '</div>' +
+        '<div class="res-edit"><input type="number" id="resInput" inputmode="numeric" min="1" max="1000000" step="10" value="' + resNow + '" aria-label="输入电阻值">' +
+        '<span class="unit">Ω</span><button class="opt" id="resApply">改好啦</button></div>' +
+        '<p class="inspect-desc">也可以自己填阻值（1Ω～1MΩ），按回车或点「改好啦」。</p>';
     } else if (part.type === 'led') {
       html += '<div class="opt-row">' + ['#ff5d5d', '#22c55e', '#3b82f6', '#facc15', '#f8fafc'].map(function (c) {
         return '<button class="swatch' + (part.props.color === c ? ' on' : '') + '" data-color="' + c + '" style="background:' + c + '"></button>';
@@ -768,9 +826,12 @@
       var rv = Number(part.props.resistance);
       if (!(rv >= 0)) rv = 500;
       html += '<div class="pot-row">' +
+        '<div class="pot-slider">' +
         '<input type="range" id="potRange" data-part="' + part.id + '" min="0" max="1000" step="10" value="' + rv + '" aria-label="拖动改变电阻大小">' +
+        '<div class="pot-scale"><span>最小 0Ω</span><span>最大 1kΩ</span></div>' +
+        '</div>' +
         '<span class="pot-val" id="potVal">' + App.fmtRes(rv) + '</span></div>' +
-        '<p class="inspect-desc">拖动滑块改变电阻：电阻小，电流大，灯更亮。</p>';
+        '<p class="inspect-desc">拖动滑块改变电阻：往左调小，往右调大。电阻小，电流大，灯更亮。</p>';
     } else if (part.type === 'button') {
       html += '<div class="opt-row"><button class="opt" id="insPress">👆 按住通电</button></div>' +
         '<p class="inspect-desc">按住它电流才通过，松开手就断开。</p>';
@@ -815,6 +876,31 @@
         App.audio.click();
         speak('电阻调到' + App.fmtRes(part.props.resistance) + '。');
       });
+    }
+    /* 电阻：自己填一个阻值（1Ω～1MΩ） */
+    var resInput = $('resInput');
+    if (resInput) {
+      var applyRes = function () {
+        var v = Number(resInput.value);
+        if (!isFinite(v) || v <= 0) {
+          toast('请输入大于 0 的数字', null, { silent: true });
+          speak('请输入一个大于零的电阻值。');
+          return;
+        }
+        v = Math.round(Math.max(1, Math.min(1000000, v)));
+        if (v === Number(part.props.resistance)) { renderInspector(); return; }
+        App.pushHistory();
+        part.props.resistance = v;
+        App.afterChange();
+        App.audio.click();
+        speak('电阻改成' + App.fmtRes(v) + '啦。');
+        renderInspector();
+      };
+      on(resInput, 'keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); applyRes(); }
+      });
+      var resBtn = $('resApply');
+      if (resBtn) on(resBtn, 'click', applyRes);
     }
     /* 按钮：按住才通电。松手的监听挂在 window 上，面板重建也不怕 */
     var press = $('insPress');
@@ -954,6 +1040,8 @@
     var s = fit * App.state.zoom;
     App.state.scale = s;
     el.stage.style.transform = 'scale(' + s + ')';
+    /* 接线点在小屏 / 缩小看全图时「反向放大」一点，保证屏幕上的大小差不多，方便小朋友点 */
+    el.stage.style.setProperty('--inv', Math.min(2.2, Math.max(1, 1 / s)).toFixed(3));
     el.stageHolder.style.width = (App.STAGE_W * s) + 'px';
     el.stageHolder.style.height = (App.STAGE_H * s) + 'px';
     /* 缩放变化时，选中的电线要重画，✕ 才能保持合适大小 */
@@ -1072,6 +1160,7 @@
     openModal: openModal, closeModal: closeModal, toast: toast,
     speak: speak, speakProblem: speakProblem, explainType: explainType, explainPart: explainPart,
     pressButton: pressButton, reverseMotorWires: reverseMotorWires,
+    pathD: pathD, wireObstacles: wireObstacles,
     partEls: partEls
   };
 })(window);

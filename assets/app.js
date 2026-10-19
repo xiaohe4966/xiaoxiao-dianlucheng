@@ -64,6 +64,7 @@
   }
   function fmtRes(v) {
     v = Number(v) || 0;
+    if (v >= 1000000) return (v / 1000000) + ' MΩ';
     return v >= 1000 ? (v / 1000) + ' kΩ' : v + 'Ω';
   }
 
@@ -423,7 +424,9 @@
       out.message = '短路啦！有一根电线直接把电池的正极和负极连起来了。快把中间的电线拿掉，或者在中间加一个灯泡、电阻、电机、喇叭。';
       return out;
     }
-    if (sim && sim.totalCurrent > 0.00001) {
+    /* 0.5µA 以上就算「电路通了」：1MΩ 电阻配 3V 电池只有约 1.2µA，
+       不能误判成「还没连成一个圈」 */
+    if (sim && sim.totalCurrent > 0.0000005) {
       var worst = worstStress();
       if (worst && worst.st.ratio > 1) return overloadFault(worst.part, worst.st);
       /* 电流小到 1mA 以下：电路是通的，但什么也带不动（常见于电压表串进了电路） */
