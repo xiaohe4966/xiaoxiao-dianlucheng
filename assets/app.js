@@ -5,7 +5,13 @@
   var STAGE_W = 1200, STAGE_H = 760;
   var STORAGE_KEY = 'xiaoxiao-dianlucheng-v1';
   var SOUND_KEY = 'xiaoxiao-dianlucheng-sound';
-  var WIRE_COLORS = ['#ff6b6b', '#4a90e2', '#2ec4b6', '#a78bfa', '#f59e0b', '#22c55e'];
+  /* 12 种差别明显的电线颜色：新电线优先挑没用过的，
+     如果两根电线靠得近或者交叉，就挑颜色差得最远的，避免看混 */
+  var WIRE_COLORS = [
+    '#e11d48', '#2563eb', '#16a34a', '#f97316',
+    '#7c3aed', '#0d9488', '#ca8a04', '#92400e',
+    '#0ea5e9', '#4d7c0f', '#334155', '#a21caf'
+  ];
 
   var state = {
     parts: [], wires: [], nextId: 1, selection: null,
@@ -31,10 +37,7 @@
     }
     scan(state.parts); scan(state.wires);
     state.nextId = Math.max(state.nextId, max + 1);
-    state.wires.forEach(function (w) {
-      if (!w.id) w.id = uid('w');
-      if (!w.color) w.color = WIRE_COLORS[(parseInt(String(w.id).replace(/\D/g, ''), 10) || 0) % WIRE_COLORS.length];
-    });
+    /* 先给零件编号，电线配色时才能按位置判断「离得近不近」 */
     state.parts.forEach(function (p) {
       if (!p.id) p.id = uid('p');
       var def = PARTS[p.type];
@@ -42,6 +45,10 @@
         p.x = clamp(Math.round(p.x), 6, STAGE_W - def.w - 6);
         p.y = clamp(Math.round(p.y), 6, STAGE_H - def.h - 6);
       }
+    });
+    state.wires.forEach(function (w) {
+      if (!w.id) w.id = uid('w');
+      if (!w.color) w.color = pickWireColor(w.a, w.b);
     });
   }
   function defOf(p) { return PARTS[p.type]; }
@@ -54,6 +61,72 @@
     var pa = byId(w.a.part), pb = byId(w.b.part);
     if (!pa || !pb) return null;
     return [termPos(pa, w.a.term), termPos(pb, w.b.term)];
+  }
+  /* ---------- 电线配色 ---------- */
+  function hexRgb(hex) {
+    var h = String(hex || '').replace('#', '');
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    var n = parseInt(h, 16);
+    if (!isFinite(n)) return { r: 128, g: 128, b: 128 };
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+  }
+  /* 人眼对绿色最敏感，红蓝次之，用加权距离判断「颜色差得远不远」 */
+  function colorDist(a, b) {
+    var x = hexRgb(a), y = hexRgb(b);
+    var dr = x.r - y.r, dg = x.g - y.g, db = x.b - y.b;
+    return Math.sqrt(2 * dr * dr + 4 * dg * dg + 3 * db * db);
+  }
+  function ptSegDist(px, py, x1, y1, x2, y2) {
+    var dx = x2 - x1, dy = y2 - y1;
+    var len2 = dx * dx + dy * dy;
+    var t = len2 ? ((px - x1) * dx + (py - y1) * dy) / len2 : 0;
+    t = clamp(t, 0, 1);
+    var qx = x1 + t * dx, qy = y1 + t * dy;
+    return Math.sqrt((px - qx) * (px - qx) + (py - qy) * (py - qy));
+  }
+  function segsCross(a, b) {
+    function orient(x1, y1, x2, y2, x3, y3) {
+      return (x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1);
+    }
+    var o1 = orient(a.x1, a.y1, a.x2, a.y2, b.x1, b.y1);
+    var o2 = orient(a.x1, a.y1, a.x2, a.y2, b.x2, b.y2);
+    var o3 = orient(b.x1, b.y1, b.x2, b.y2, a.x1, a.y1);
+    var o4 = orient(b.x1, b.y1, b.x2, b.y2, a.x2, a.y2);
+    return o1 * o2 < 0 && o3 * o4 < 0;
+  }
+  function segSegDist(a, b) {
+    if (segsCross(a, b)) return 0;
+    return Math.min(
+      ptSegDist(a.x1, a.y1, b.x1, b.y1, b.x2, b.y2),
+      ptSegDist(a.x2, a.y2, b.x1, b.y1, b.x2, b.y2),
+      ptSegDist(b.x1, b.y1, a.x1, a.y1, a.x2, a.y2),
+      ptSegDist(b.x2, b.y2, a.x1, a.y1, a.x2, a.y2)
+    );
+  }
+  function pickWireColor(a, b) {
+    var pa = byId(a.part), pb = byId(b.part);
+    if (!pa || !pb) return WIRE_COLORS[state.wires.length % WIRE_COLORS.length];
+    var ea = termPos(pa, a.term), eb = termPos(pb, b.term);
+    var seg = { x1: ea.x, y1: ea.y, x2: eb.x, y2: eb.y };
+    var used = {}, count = {}, near = [];
+    state.wires.forEach(function (w) {
+      if (!w.color) return;
+      used[w.color] = 1;
+      count[w.color] = (count[w.color] || 0) + 1;
+      var ends = wireEnds(w);
+      if (!ends) return;
+      var d = segSegDist(seg, { x1: ends[0].x, y1: ends[0].y, x2: ends[1].x, y2: ends[1].y });
+      if (d < 56) near.push(w.color);
+    });
+    var best = WIRE_COLORS[0], bestScore = -Infinity;
+    WIRE_COLORS.forEach(function (c) {
+      var minD = 9999, i;
+      for (i = 0; i < near.length; i++) minD = Math.min(minD, colorDist(c, near[i]));
+      if (!near.length) minD = 0;
+      var score = minD * 1.5 + (used[c] ? 0 : 80) - (count[c] || 0) * 6;
+      if (score > bestScore) { bestScore = score; best = c; }
+    });
+    return best;
   }
   function formatCurrent(a) {
     var v = Math.abs(a);
@@ -139,7 +212,7 @@
     var exists = findWire(a, b);
     if (exists) { state.selection = { kind: 'wire', id: exists.id }; UI.toast('这两个圆点已经连好啦'); return exists; }
     pushHistory();
-    var w = { id: uid('w'), a: a, b: b, color: WIRE_COLORS[state.wires.length % WIRE_COLORS.length] };
+    var w = { id: uid('w'), a: a, b: b, color: pickWireColor(a, b) };
     state.wires.push(w);
     state.selection = { kind: 'wire', id: w.id };
     afterChange();
@@ -537,26 +610,68 @@
     { id: 'lamp', icon: '🔆', label: '点亮小灯泡', type: 'lamp', hint: '电池、开关和小灯泡连成一个圈，按通电试试。' },
     { id: 'motor', icon: '🌀', label: '让电机转起来', type: 'motor', hint: '把电机接在电池和开关中间，通电后它就会转。' },
     { id: 'motorRev', icon: '🔄', label: '让电机反转', type: 'motor', back: true, hint: '点中电机，再点「🔄 调换两根线（反转）」，它就会反着转。' },
-    { id: 'buzzer', icon: '🔊', label: '让喇叭唱起歌', type: 'buzzer', hint: '把喇叭接进电路，通电后它会发出声音。' }
+    { id: 'buzzer', icon: '🔊', label: '让喇叭唱起歌', type: 'buzzer', hint: '把喇叭接进电路，通电后它会发出声音。' },
+    {
+      id: 'diode', icon: '🚪', label: '让电流穿过二极管', type: 'diode',
+      hint: '二极管像一扇单向门，三角形尖尖的方向就是电流能过去的方向。把它和电阻、LED 串成一个圈，再通电。',
+      test: function (p, info, sim) {
+        return !sim.short && !state.burnt[p.id] && info.conducting && Math.abs(info.current) > 0.0018;
+      }
+    },
+    {
+      id: 'ammeter', icon: '🅰️', label: '用电流表测电流', type: 'ammeter',
+      hint: '把电流表串进电路，和零件手拉手，表盘上就会显示流过它的电流。',
+      test: function (p, info, sim) {
+        return !sim.short && sim.totalCurrent > 0.002 && Math.abs(info.current) > 0.001;
+      }
+    },
+    {
+      id: 'voltmeter', icon: '⚡', label: '用电压表测电压', type: 'voltmeter',
+      hint: '把电压表并联在零件两边，测它两端的电压；不要把它串进电路里。',
+      test: function (p, info, sim) {
+        return !sim.short && sim.totalCurrent > 0.002 && Math.abs(info.vdrop) > 0.5;
+      }
+    },
+    {
+      id: 'measure', icon: '🧪', label: '电流电压一起测',
+      hint: '电流表串进电路，电压表并在一个零件两边，同时读出电流和电压，像工程师一样检测电路。',
+      when: function (sim) {
+        if (sim.short || sim.totalCurrent < 0.002) return false;
+        var hasA = state.parts.some(function (p) {
+          var info = sim.parts[p.id];
+          return p.type === 'ammeter' && info && Math.abs(info.current) > 0.001;
+        });
+        var hasV = state.parts.some(function (p) {
+          var info = sim.parts[p.id];
+          return p.type === 'voltmeter' && info && Math.abs(info.vdrop) > 0.5;
+        });
+        return hasA && hasV;
+      }
+    }
   ];
   function checkTasks(sim) {
+    var won = [];
     TASKS.forEach(function (t) {
       if (state.achieved.indexOf(t.id) >= 0) return;
-      var hit = state.parts.some(function (p) {
+      var hit = t.when ? t.when(sim) : state.parts.some(function (p) {
         var info = sim.parts[p.id];
         if (!info || p.type !== t.type) return false;
+        if (t.test) return t.test(p, info, sim);
         if (t.back) return info.current < -0.0018;      /* 电流反着流 = 反转 */
         return Math.abs(info.current) > 0.0018;
       });
       if (hit) {
         state.achieved.push(t.id);
-        UI.toast('太棒了！' + t.label + ' 🎉', 'good');
+        won.push(t);
+        UI.toast('太棒了！' + t.label + ' 🎉', 'good', { silent: true });
         audio.chime();
-        UI.renderTasks();
-        commit();
-        UI.speak('太棒了！' + t.label + '，完成啦。');
       }
     });
+    if (!won.length) return;
+    UI.renderTasks();
+    commit();
+    var names = won.map(function (t) { return t.label; }).join('、');
+    UI.speak(won.length > 1 ? '太棒了！你完成了：' + names + '。' : '太棒了！' + names + '，完成啦。');
   }
 
   /* ---------- 声音 ---------- */
@@ -700,6 +815,30 @@
       build: function () {
         var bat = makePart('battery', 100, 300), sw = makePart('switch', 340, 301), bz = makePart('buzzer', 620, 288);
         return [pwire(bat, 'pos', sw, 'a'), pwire(sw, 'b', bz, 'a'), pwire(bz, 'b', bat, 'neg')];
+      }
+    },
+    diode: {
+      name: '二极管单向门', icon: '🚪', desc: '电流只能从二极管的正极进、负极出，像一扇单向门。',
+      note: '二极管把电流的方向管得死死的：接反了，电流就过不去，LED 不会亮。它还会吃掉大约 0.7V 电压。',
+      build: function () {
+        var bat = makePart('battery', 50, 300), sw = makePart('switch', 260, 308),
+            r = makePart('resistor', 450, 328, { resistance: 47 }),
+            d = makePart('diode', 660, 316), led = makePart('led', 850, 280);
+        return [pwire(bat, 'pos', sw, 'a'), pwire(sw, 'b', r, 'a'), pwire(r, 'b', d, 'an'),
+                pwire(d, 'ca', led, 'an'), pwire(led, 'ca', bat, 'neg')];
+      }
+    },
+    meters: {
+      name: '电流电压一起测', icon: '🧪', desc: '电流表串在电路里，电压表并在 LED 两边，同时读出电流和电压。',
+      note: '电流表要串联，电压表要并联。这样就能像工程师一样检测电路：电流多大、零件两端的电压多大。',
+      build: function () {
+        var bat = makePart('battery', 50, 290), sw = makePart('switch', 240, 298),
+            r = makePart('resistor', 420, 318),
+            a = makePart('ammeter', 600, 280), led = makePart('led', 800, 270),
+            v = makePart('voltmeter', 900, 480);
+        return [pwire(bat, 'pos', sw, 'a'), pwire(sw, 'b', r, 'a'), pwire(r, 'b', a, 'a'),
+                pwire(a, 'b', led, 'an'), pwire(led, 'ca', bat, 'neg'),
+                pwire(v, 'a', led, 'an'), pwire(v, 'b', led, 'ca')];
       }
     },
     short: {

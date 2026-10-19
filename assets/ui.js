@@ -9,6 +9,7 @@
   var lastProblemCode = '';
   var explainTimer = null;
   var autoProblemTimer = null;
+  var revealTimer = null;
   var wireHintShown = false;
 
   function $(id) { return document.getElementById(id); }
@@ -73,6 +74,7 @@
     el.meterNote = $('meterNote');
     el.taskList = $('taskList');
     el.inspectBody = $('inspectBody');
+    el.inspectCard = $('inspectCard');
     el.btnRun = $('btnRun');
     el.runText = $('runText');
     el.btnUndo = $('btnUndo');
@@ -128,7 +130,9 @@
     });
     on(document, 'keydown', function (e) { if (e.key === 'Escape') { closeModal(); if (global.Interact) Interact.cancelWire(); } });
 
+    var pressX = 0, pressY = 0;
     on(el.partsLayer, 'pointerdown', function (e) {
+      pressX = e.clientX; pressY = e.clientY;
       var term = e.target.closest('.terminal');
       if (term) { Interact.startTerminal(e, term); return; }
       var del = e.target.closest('.part-del');
@@ -141,6 +145,8 @@
       if (e.target.closest('.terminal') || e.target.closest('.part-del')) return;
       var partEl = e.target.closest('.part');
       if (!partEl) return;
+      /* 拖完零件松手时浏览器也可能补一个 click：别把拖动当成点击去讲解、去滚面板 */
+      if (Math.abs(e.clientX - pressX) > 6 || Math.abs(e.clientY - pressY) > 6) return;
       if (explainTimer) { clearTimeout(explainTimer); explainTimer = null; }
       var id = partEl.dataset.id;
       explainTimer = setTimeout(function () {
@@ -154,6 +160,7 @@
           extra = '现在它里面有' + App.formatCurrent(info.current) + '的电流。';
         }
         explainPart(part, extra);
+        revealEditor();
       }, 230);
     });
     on(el.partsLayer, 'dblclick', function (e) {
@@ -430,6 +437,23 @@
     Object.keys(partEls).forEach(function (id) { partEls[id].classList.toggle('selected', id === selId); });
     renderWires();
     renderInspector();
+  }
+  /* 点了电阻 / 可变电阻后，如果「改阻值」的控件不在眼前（小窗口、平板横条、手机），
+     就自动滚过去并闪一下边框，免得小朋友找不到改哪里。 */
+  function revealEditor() {
+    var target = el.inspectBody && el.inspectBody.querySelector('#resInput, #potRange');
+    if (!target) return;
+    var r = target.getBoundingClientRect();
+    var vw = global.innerWidth || 1200, vh = global.innerHeight || 800;
+    if (r.top >= 8 && r.bottom <= vh - 8 && r.left >= 8 && r.right <= vw - 8) return;
+    if (target.scrollIntoView) target.scrollIntoView({ block: 'center', inline: 'center' });
+    var card = el.inspectCard;
+    if (!card) return;
+    card.classList.remove('attention');
+    void card.offsetWidth;
+    card.classList.add('attention');
+    clearTimeout(revealTimer);
+    revealTimer = setTimeout(function () { card.classList.remove('attention'); }, 1600);
   }
 
   /* ---------- 根据仿真结果更新零件外观 ---------- */
@@ -754,9 +778,11 @@
   function infoFor(partId) { var sim = App.state.sim; return sim && sim.parts[partId]; }
   function renderInspector() {
     var st = App.state, sel = st.selection, body = el.inspectBody;
-    /* 正在拖电位器滑块的时候不要重建面板，不然滑块会松手 */
+    /* 正在拖滑块 / 在输入框里打数字的时候不要重建面板，不然会松手、数字会被清掉 */
     var activeEl = document.activeElement;
-    if (sel && sel.kind === 'part' && activeEl && activeEl.id === 'potRange' && activeEl.dataset.part === sel.id) return;
+    if (sel && sel.kind === 'part' && activeEl &&
+        ((activeEl.id === 'potRange' && activeEl.dataset.part === sel.id) ||
+         (activeEl.id === 'resInput' && activeEl.dataset.part === sel.id))) return;
     if (!sel) {
       body.innerHTML = '<p class="muted">点一个零件或一根电线，就能在这里看到它的小秘密。</p>';
       return;
@@ -812,7 +838,7 @@
       html += '<div class="opt-row">' + [10, 47, 100, 220, 1000].map(function (v) {
         return '<button class="opt' + (resNow === v ? ' on' : '') + '" data-res="' + v + '">' + App.fmtRes(v) + '</button>';
       }).join('') + '</div>' +
-        '<div class="res-edit"><input type="number" id="resInput" inputmode="numeric" min="1" max="1000000" step="10" value="' + resNow + '" aria-label="输入电阻值">' +
+        '<div class="res-edit"><span class="res-label">阻值</span><input type="number" id="resInput" data-part="' + part.id + '" inputmode="numeric" min="1" max="1000000" step="10" value="' + resNow + '" aria-label="输入电阻值">' +
         '<span class="unit">Ω</span><button class="opt" id="resApply">改好啦</button></div>' +
         '<p class="inspect-desc">也可以自己填阻值（1Ω～1MΩ），按回车或点「改好啦」。</p>';
     } else if (part.type === 'led') {
@@ -894,6 +920,8 @@
         App.afterChange();
         App.audio.click();
         speak('电阻改成' + App.fmtRes(v) + '啦。');
+        /* 先让输入框失焦，面板才会重建、显示出新的阻值 */
+        if (resInput.blur) resInput.blur();
         renderInspector();
       };
       on(resInput, 'keydown', function (e) {
