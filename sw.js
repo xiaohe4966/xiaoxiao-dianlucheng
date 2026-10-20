@@ -2,7 +2,7 @@
 'use strict';
 
 /* ASSET_VERSION 要和 index.html 里 JS / CSS 的 ?v= 保持一致 */
-var ASSET_VERSION = '8.30';
+var ASSET_VERSION = '8.32';
 var CACHE = 'xiaoxiao-dianlucheng-v' + ASSET_VERSION + '.0';
 var ASSETS = [
   './',

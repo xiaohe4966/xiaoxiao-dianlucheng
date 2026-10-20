@@ -18,6 +18,11 @@
     '#7c3aed', '#0d9488', '#ca8a04', '#92400e',
     '#0ea5e9', '#4d7c0f', '#334155', '#a21caf'
   ];
+  var WIRE_NAME_OF = {
+    '#e11d48': '红色', '#2563eb': '蓝色', '#16a34a': '绿色', '#f97316': '橙色',
+    '#7c3aed': '紫色', '#0d9488': '青色', '#ca8a04': '金黄色', '#92400e': '棕色',
+    '#0ea5e9': '天蓝色', '#4d7c0f': '深绿色', '#334155': '灰色', '#a21caf': '粉紫色'
+  };
 
   var state = {
     parts: [], wires: [], nextId: 1, selection: null,
@@ -299,6 +304,20 @@
   function commit() {
     try { localStorage.setItem(STORAGE_KEY, snapshot()); } catch (e) {}
     UI.updateUndo();
+  }
+
+  /* 给选中的电线换颜色：不改电路连接，所以不进撤销历史 */
+  function setWireColor(id, color) {
+    if (WIRE_COLORS.indexOf(color) < 0) return false;
+    var w = state.wires.find(function (x) { return x.id === id; });
+    if (!w || w.color === color) return color;
+    w.color = color;
+    commit();
+    UI.renderWires();
+    var label = (WIRE_NAME_OF[color]) || '其他颜色';
+    UI.toast('电线换成' + label + '啦', 'good');
+    UI.speak('电线换成' + label + '啦。');
+    return color;
   }
   function backupCurrent() {
     try { localStorage.setItem(BACKUP_KEY, snapshot()); } catch (e) {}
@@ -1543,6 +1562,7 @@
     afterChange: afterChange, evaluate: evaluate, diagnose: diagnose, termLabel: termLabel,
     startRun: startRun, stopRun: stopRun, toggleRun: toggleRun, setRunUI: setRunUI,
     loadPreset: loadPreset, loadCase: loadCase, audio: audio, init: init, setWireStyle: setWireStyle,
+    setWireColor: setWireColor, wireColors: WIRE_COLORS,
     setWireLabels: setWireLabels,
     recordMeasurement: recordMeasurement, clearLog: clearLog,
     startGuide: startGuide, skipGuideStep: skipGuideStep, stopGuide: stopGuide, guideStep: guideStep,

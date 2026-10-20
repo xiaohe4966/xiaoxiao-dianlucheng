@@ -358,6 +358,19 @@ button{font:inherit}
 .wire-flow{fill:none;stroke:#ffffff;stroke-width:3.6;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:2 20;opacity:0}
 .wire.active .wire-flow{opacity:1;animation:wireFlow .42s linear infinite}
 @keyframes wireFlow{to{stroke-dashoffset:-22}}
+/* 曲线模式下，下面那根线在交叉处开一个小口，看起来像被上面的线跨过去 */
+.wire-gap{fill:none;stroke:var(--paper);stroke-width:16;stroke-linecap:round;pointer-events:none}
+/* 几根线接在同一个接线柱上时的实心连接点 */
+.wire-junctions{pointer-events:none}
+.junction-dot{fill:#22314a;stroke:#fffdf7;stroke-width:2;opacity:.92}
+/* 选中电线后可以换颜色 */
+.color-row{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 2px}
+.wire-color-chip{
+  width:24px;height:24px;border-radius:8px;border:2px solid rgba(34,49,74,.25);
+  background:var(--chip);cursor:pointer;padding:0;transition:transform .12s,box-shadow .12s;
+}
+.wire-color-chip:hover{transform:translateY(-2px)}
+.wire-color-chip.active{border-color:var(--ink);box-shadow:0 0 0 3px rgba(34,49,74,.18)}
 .wire.active .wire-core{filter:drop-shadow(0 0 4px var(--wire))}
 .wire.selected .wire-core{stroke:var(--teal);stroke-width:7.5}
 .wire.hot .wire-core{stroke:#ef4444;stroke-width:7;animation:hotFlash .22s infinite alternate}

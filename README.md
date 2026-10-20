@@ -165,7 +165,7 @@ CREDITS.md              素材来源与版权说明
 LICENSE                 本项目许可证（AGPL-3.0）
 ```
 
-> 小提示：改过 `assets/` 里的 JS / CSS 之后，把 `index.html` 里的 `?v=` 和 `sw.js` 里的 `ASSET_VERSION` 一起加一（当前是 `?v=8.30`），浏览器就会立刻用上新文件，不用请用户手动强制刷新。发布前建议先跑一遍测试：
+> 小提示：改过 `assets/` 里的 JS / CSS 之后，把 `index.html` 里的 `?v=` 和 `sw.js` 里的 `ASSET_VERSION` 一起加一（当前是 `?v=8.32`），浏览器就会立刻用上新文件，不用请用户手动强制刷新。发布前建议先跑一遍测试：
 
 ```bash
 npm test

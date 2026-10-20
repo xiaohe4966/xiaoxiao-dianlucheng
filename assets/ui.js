@@ -5,6 +5,12 @@
   var el = {};
   var partEls = {};
   var wireVisuals = {};
+  /* 电线颜色按钮上的中文名字 */
+  var WIRE_NAME_OF = {
+    '#e11d48': '红色', '#2563eb': '蓝色', '#16a34a': '绿色', '#f97316': '橙色',
+    '#7c3aed': '紫色', '#0d9488': '青色', '#ca8a04': '金黄色', '#92400e': '棕色',
+    '#0ea5e9': '天蓝色', '#4d7c0f': '深绿色', '#334155': '灰色', '#a21caf': '粉紫色'
+  };
   var lastWireSig = '';
   var lastWirePaths = null;
   var lastSpokenProblem = '';
@@ -438,6 +444,7 @@
     }
     var paths = useCache ? lastWirePaths : {};
     var used = [], usedCells = {};
+    var items = [];
     App.state.wires.forEach(function (w) {
       var ends = App.wireEnds(w); if (!ends) return;
       var info = sim && sim.wires[w.id];
@@ -464,18 +471,72 @@
         });
         paths[w.id] = d;
       }
-      var dots = '';
-      var g = '<g class="wire ' + (active ? 'active' : 'idle') + (hot ? ' hot' : '') +
-        (shortWire[w.id] ? ' short-path' : '') +
-        ((sel && sel.kind === 'wire' && sel.id === w.id) ? ' selected' : '') +
-        '" data-wire="' + w.id + '" style="--wire:' + (w.color || '#c8bfa9') + '">' +
+      items.push({ w: w, d: d, info: info, active: active, hot: hot });
+    });
+
+    /* 找出两根电线交叉的地方：
+       横竖线模式：上面那根线在交叉处拱一个小桥；
+       曲线模式：在下面那根线上开一个小口，看起来像跨过去。 */
+    var ptsArr = items.map(function (it) { return wirePathPts(it.d); });
+    var hopLists = items.map(function () { return null; });
+    var gapHtml = items.map(function () { return ''; });
+    for (var ai = 0; ai < items.length; ai++) {
+      for (var bi = ai + 1; bi < items.length; bi++) {
+        var xs = crossingPoints(ptsArr[ai], ptsArr[bi]);
+        for (var xi = 0; xi < xs.length; xi++) {
+          var x = xs[xi];
+          if (App.state.wireStyle === 'ortho') {
+            if (!hopLists[bi]) hopLists[bi] = [];
+            hopLists[bi].push({ i: x.bi, t: x.tb });
+          } else {
+            var gd = gapPathAt(ptsArr[ai], x.ai, x);
+            if (gd) gapHtml[ai] += '<path class="wire-gap" d="' + gd + '"/>';
+          }
+        }
+      }
+    }
+
+    var html = '';
+    items.forEach(function (it, idx) {
+      var d = it.d;
+      var gap = gapHtml[idx] || '';
+      if (App.state.wireStyle === 'ortho' && hopLists[idx] && hopLists[idx].length) {
+        var hop = orthoHopD(ptsArr[idx], hopLists[idx]);
+        d = hop.d;
+        gap += hop.gaps.filter(Boolean).map(function (g) { return '<path class="wire-gap" d="' + g + '"/>'; }).join('');
+      }
+      var g = '<g class="wire ' + (it.active ? 'active' : 'idle') + (it.hot ? ' hot' : '') +
+        (shortWire[it.w.id] ? ' short-path' : '') +
+        ((sel && sel.kind === 'wire' && sel.id === it.w.id) ? ' selected' : '') +
+        '" data-wire="' + it.w.id + '" style="--wire:' + (it.w.color || '#c8bfa9') + '">' +
         '<path class="wire-hit" d="' + d + '"/>' +
         '<path class="wire-case" d="' + d + '"/>' +
         '<path class="wire-core" d="' + d + '"/>' +
-        '<path class="wire-flow" d="' + d + '"/>' + dots +
+        '<path class="wire-flow" d="' + d + '"/>' + gap +
         '</g>';
       html += g;
     });
+
+    /* 几根线接在同一个接线柱上时，画一个实心小圆点，和真实电路图一样 */
+    var junction = {};
+    App.state.wires.forEach(function (w) {
+      ['a', 'b'].forEach(function (k) {
+        var key = w[k].part + '|' + w[k].term;
+        junction[key] = (junction[key] || 0) + 1;
+      });
+    });
+    var jDots = '';
+    Object.keys(junction).forEach(function (key) {
+      if (junction[key] < 2) return;
+      var arr = key.split('|');
+      var part = App.byId(arr[0]);
+      if (!part) return;
+      var p = App.termPos(part, arr[1]);
+      if (!p) return;
+      jDots += '<circle class="junction-dot" cx="' + r1(p.x) + '" cy="' + r1(p.y) + '" r="5"/>';
+    });
+    if (jDots) html += '<g class="wire-junctions">' + jDots + '</g>';
+
     lastWireSig = sig;
     lastWirePaths = paths;
     el.wiresGroup.innerHTML = html;
@@ -652,6 +713,104 @@
     var d = 'M ' + r1(pts[0].x) + ' ' + r1(pts[0].y);
     for (var i = 1; i < pts.length; i++) d += ' L ' + r1(pts[i].x) + ' ' + r1(pts[i].y);
     return d;
+  }
+  /* 把电线路径还原成点列，用来找「两根线在哪里交叉」 */
+  function wirePathPts(d) {
+    var nums = String(d || '').match(/-?\d+(?:\.\d+)?/g) || [];
+    if (nums.length < 2) return [];
+    var pts = [{ x: +nums[0], y: +nums[1] }], i;
+    var q = /Q\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)/.exec(d);
+    if (q) {
+      var p1 = pts[0], m = { x: +q[1], y: +q[2] }, p2 = { x: +q[3], y: +q[4] };
+      for (i = 1; i < 12; i++) {
+        var t = i / 12, mt = 1 - t;
+        pts.push({
+          x: mt * mt * p1.x + 2 * mt * t * m.x + t * t * p2.x,
+          y: mt * mt * p1.y + 2 * mt * t * m.y + t * t * p2.y
+        });
+      }
+      pts.push(p2);
+      return pts;
+    }
+    for (i = 2; i + 1 < nums.length; i += 2) pts.push({ x: +nums[i], y: +nums[i + 1] });
+    return pts;
+  }
+  function segLen(a, b) {
+    var dx = b.x - a.x, dy = b.y - a.y;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+  function segSegX(p1, p2, p3, p4) {
+    var d1x = p2.x - p1.x, d1y = p2.y - p1.y;
+    var d2x = p4.x - p3.x, d2y = p4.y - p3.y;
+    var den = d1x * d2y - d1y * d2x;
+    if (Math.abs(den) < 1e-9) return null;
+    var t = ((p3.x - p1.x) * d2y - (p3.y - p1.y) * d2x) / den;
+    var u = ((p3.x - p1.x) * d1y - (p3.y - p1.y) * d1x) / den;
+    if (t < 0 || t > 1 || u < 0 || u > 1) return null;
+    return { x: p1.x + t * d1x, y: p1.y + t * d1y, ta: t, tb: u };
+  }
+  /* 两根电线在哪里交叉（离两边端点太近的不算，那是接线柱） */
+  function crossingPoints(A, B) {
+    var out = [], i, j;
+    if (A.length < 2 || B.length < 2) return out;
+    for (i = 0; i < A.length - 1; i++) {
+      for (j = 0; j < B.length - 1; j++) {
+        var la = segLen(A[i], A[i + 1]), lb = segLen(B[j], B[j + 1]);
+        if (la < 14 || lb < 14) continue;
+        var x = segSegX(A[i], A[i + 1], B[j], B[j + 1]);
+        if (!x) continue;
+        if (x.ta * la < 8 || (1 - x.ta) * la < 8) continue;
+        if (x.tb * lb < 8 || (1 - x.tb) * lb < 8) continue;
+        out.push({ x: x.x, y: x.y, ai: i, ta: x.ta, bi: j, tb: x.tb });
+      }
+    }
+    return out;
+  }
+  /* 曲线模式下：在下面那根线上开一个小口，上面的线「跨」过去 */
+  function gapPathAt(pts, segIdx, point) {
+    if (!point || !isFinite(point.x) || !isFinite(point.y) || !pts || !pts[segIdx] || !pts[segIdx + 1]) {
+      console.warn('gapPathAt bad', segIdx, point, pts && pts.length);
+      return '';
+    }
+    var a = pts[segIdx], b = pts[segIdx + 1];
+    var dx = b.x - a.x, dy = b.y - a.y;
+    var len = Math.sqrt(dx * dx + dy * dy) || 1;
+    var ux = dx / len, uy = dy / len, half = 9;
+    return 'M ' + r1(point.x - ux * half) + ' ' + r1(point.y - uy * half) +
+      ' L ' + r1(point.x + ux * half) + ' ' + r1(point.y + uy * half);
+  }
+  /* 横竖模式下：上面那根线在交叉处拱一个小桥 */
+  function orthoHopD(pts, crossings) {
+    if (!crossings || !crossings.length) return { d: pointsToPath(pts), gaps: [] };
+    var bySeg = {};
+    crossings.forEach(function (c) {
+      if (!bySeg[c.i]) bySeg[c.i] = [];
+      bySeg[c.i].push(c);
+    });
+    var out = 'M ' + r1(pts[0].x) + ' ' + r1(pts[0].y);
+    var gaps = [], i, k;
+    for (i = 0; i < pts.length - 1; i++) {
+      var a = pts[i], b = pts[i + 1];
+      var dx = b.x - a.x, dy = b.y - a.y;
+      var len = segLen(a, b) || 1;
+      var ux = dx / len, uy = dy / len;
+      var list = (bySeg[i] || []).slice().sort(function (p, q) { return p.t - q.t; });
+      var lastEnd = 0;
+      for (k = 0; k < list.length; k++) {
+        var c = list[k];
+        var at = c.t * len;
+        var cp = { x: a.x + dx * c.t, y: a.y + dy * c.t };
+        if (at < 10 || at > len - 17) { gaps.push(gapPathAt(pts, i, cp)); continue; }
+        if (at < lastEnd + 22) { gaps.push(gapPathAt(pts, i, cp)); continue; }
+        var p1 = cp;
+        var p2 = { x: p1.x + ux * 16, y: p1.y + uy * 16 };
+        out += ' L ' + r1(p1.x) + ' ' + r1(p1.y);
+        out += ' A 8 8 0 0 0 ' + r1(p2.x) + ' ' + r1(p2.y);
+        lastEnd = at + 16;
+      }
+      out += ' L ' + r1(b.x) + ' ' + r1(b.y);
+    }
+    return { d: out, gaps: gaps };
   }
   function orthoSegments(pts) {
     var segs = [];
@@ -1509,15 +1668,26 @@
       var w = st.wires.find(function (x) { return x.id === sel.id; });
       if (!w) { body.innerHTML = '<p class="muted">这根电线已经不在啦。</p>'; return; }
       var info = st.sim && st.sim.wires[w.id];
+      var chips = (App.wireColors || []).map(function (c) {
+        var on = (w.color || '') === c ? ' active' : '';
+        return '<button type="button" class="wire-color-chip' + on + '" data-color="' + c + '" style="--chip:' + c + '" title="' + (WIRE_NAME_OF[c] || '换颜色') + '"></button>';
+      }).join('');
       body.innerHTML =
         '<div class="inspect-title">🪢 电线</div>' +
         '<p class="inspect-desc">把两个零件连起来，电流才能通过。</p>' +
         '<p class="inspect-more">' + descFor('wire') + '</p>' +
         '<div class="readout">' + (info ? '<span>电流 <b data-live="current">' + App.formatCurrent(info.current) + '</b></span>' : '') + '</div>' +
         '<p class="spec-line">📏 载流约 1A，电阻很小</p>' +
+        '<div class="color-row" data-nospeak>' + chips + '</div>' +
         '<div class="inspect-actions">' +
         '<button class="btn small" id="insSay">🔊 听讲解</button>' +
         '<button class="btn small danger" id="insDel">🗑️ 删掉这根电线</button></div>';
+      Array.prototype.forEach.call(body.querySelectorAll('.wire-color-chip'), function (chip) {
+        on(chip, 'click', function () {
+          if (App.setWireColor(w.id, chip.dataset.color)) lastInspectKey = '';
+          renderInspector();
+        });
+      });
       on($('insDel'), 'click', function () { App.deleteSelection(); });
       on($('insSay'), 'click', function () { ensureVoice(); explainType('wire'); });
       return;
