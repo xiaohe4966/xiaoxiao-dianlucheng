@@ -27,6 +27,7 @@
   var state = {
     parts: [], wires: [], nextId: 1, selection: null,
     running: false, exploding: false, sim: null, diodeState: {},
+    caps: {},   /* 电容里当前存的电压（伏），断电时原样冻结 */
     past: [], future: [], achieved: [],
     zoom: 1, fitScale: 1, scale: 1,
     sound: true, wireStart: null, shortTimer: null,
@@ -264,6 +265,7 @@
     state.parts = d.parts; state.wires = d.wires;
     state.nextId = d.nextId; state.achieved = d.achieved;
     state.burnt = d.burnt;
+    state.caps = {};
     state.heat = {};
     state.selection = null;
     releaseButtons();
@@ -390,6 +392,7 @@
     } catch (e) {}
     state.parts = d.parts; state.wires = d.wires; state.nextId = d.nextId;
     state.achieved = []; state.burnt = {}; state.heat = {};
+    state.caps = {}; state.selection = null; state.diodeState = {};
     state.presetNote = '这是朋友分享的电路，可以随便改。';
     state.shareLoaded = true;
     try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
@@ -526,6 +529,7 @@
     if (state.running) stopRun();
     state.parts = []; state.wires = []; state.selection = null;
     state.burnt = {}; state.heat = {};
+    state.caps = {};
     state.guide = { active: false, step: 0 };
     state.hospital = null;
     afterChange();
@@ -534,6 +538,19 @@
     UI.speak('工作台清空啦。按撤销可以找回来。');
   }
   function duplicateProps(p) { return JSON.parse(JSON.stringify(p.props)); }
+
+  /* 电容「放掉电」：把存进去的电压清空，可以再看一次充电的样子 */
+  function dischargeCap(id) {
+    var p = byId(id);
+    if (!p || p.type !== 'cap') return false;
+    state.caps[id] = 0;
+    audio.click();
+    evaluate();
+    UI.updatePanels();
+    UI.toast('电容放掉电啦 🫗', 'good');
+    UI.speak('电容放掉电啦。');
+    return true;
+  }
 
   function afterChange() {
     UI.renderAll();
@@ -817,6 +834,17 @@
         out.message = '短路啦！二极管不是用电器，它只是一扇单向门。把它直接接在电池两头，电流就抄近路跑回去了，二极管会发烫烧坏。要在它旁边加一个灯泡、电阻、LED 或者电机。';
         return out;
       }
+      /* 大电容并联在电池两头：第一股充电电流很大，但很快会自己停下来 */
+      for (var csi = 0; csi < state.parts.length; csi++) {
+        var cp2 = state.parts[csi];
+        if (cp2.type !== 'cap') continue;
+        var ci2 = sim.parts[cp2.id];
+        if (ci2 && Math.abs(ci2.current) > 0.45) {
+          out.partId = cp2.id;
+          out.message = '一股很大的电流正冲进电容。电容器存满以后电流会自己变小，不会一直这么大。不想看到它这么冲，就在电容旁边串一个灯泡或者电阻。';
+          return out;
+        }
+      }
       if (ammeterInLoop) {
         out.message = '短路啦！电流表的内阻非常小，直接接在电池两头就等于一根电线，电流会大得吓人。电流表要「串」在电路里，不能并到电池两头。';
         return out;
@@ -874,6 +902,22 @@
         };
       }
     }
+    /* 电容充满电以后会挡住直流：电流几乎变成 0。
+       这不是断线，给小朋友一个专门的解释，顺便教他们怎么再看一次充电。
+       （只在通电时提示；没充电的新电容 vdrop≈0，不会误报） */
+    var capFull = null;
+    for (i = 0; i < state.parts.length; i++) {
+      p = state.parts[i];
+      if (p.type !== 'cap') continue;
+      var cinfo = pointInfo(sim, p.id);
+      if (cinfo && Math.abs(cinfo.vdrop) > 0.5) { capFull = p; break; }
+    }
+    if (capFull && sim && Math.abs(sim.totalCurrent) < 0.0005) {
+      return {
+        code: 'cap-full', partId: capFull.id,
+        message: '电容存满电啦，直流被它挡住，电流几乎变成 0——这是电容的本领，不是电线断了。把它换成灯泡，或者点一下电容选「放掉电」，就能再看一次充电的样子。'
+      };
+    }
     /* 找出还没接电线的接线点，告诉小朋友问题在哪里 */
     for (i = 0; i < state.parts.length; i++) {
       p = state.parts[i];
@@ -898,9 +942,12 @@
     if (state.exploding) return;
     var sim = CircuitSim.simulate({
       parts: state.parts, wires: state.wires,
-      defOf: defOf, diodeState: state.diodeState, burnt: state.burnt
+      defOf: defOf, diodeState: state.diodeState, burnt: state.burnt,
+      caps: state.caps,
+      dt: state.running ? CircuitSim.CAP_DT : 0
     });
     state.diodeState = sim.diodeState;
+    state.caps = sim.caps || state.caps;
     state.sim = sim;
     state.lastFault = diagnose(sim);
 
@@ -1011,6 +1058,14 @@
           return p.type === 'voltmeter' && info && Math.abs(info.vdrop) > 0.5;
         });
         return hasA && hasV;
+      }
+    },
+    {
+      id: 'cap', icon: '🫗', label: '用电容存电', type: 'cap',
+      hint: '把电容和灯泡（或 LED）手拉手串在一个圈里，通电后灯会先亮、再慢慢变暗——电正在往电容里存。',
+      test: function (p, info, sim) {
+        /* 充满后电流会变成 0，所以看「存了多少电」而不是电流 */
+        return !sim.short && Math.abs(Number(state.caps[p.id]) || 0) > 1.5;
       }
     }
   ];
@@ -1443,6 +1498,15 @@
                 pwire(l1, 'b', bat, 'neg'), pwire(l2, 'b', bat, 'neg')];
       }
     },
+    capstore: {
+      name: '电容存电', icon: '🫗', desc: '电容像存电的小罐子：充电时灯先亮，慢慢变暗，存满就灭了。',
+      note: '通电看看灯闪；点一下电容选「放掉电」，可以再看一次。把电容调大（一万微法），灯亮得久一点。',
+      build: function () {
+        var bat = makePart('battery', 60, 300), sw = makePart('switch', 292, 301),
+            c = makePart('cap', 510, 300), lamp = makePart('lamp', 760, 282);
+        return [pwire(bat, 'pos', sw, 'a'), pwire(sw, 'b', c, 'a'), pwire(c, 'b', lamp, 'a'), pwire(lamp, 'b', bat, 'neg')];
+      }
+    },
     short: {
       name: '短路危险实验', icon: '💥', danger: true,
       desc: '只用一根电线把电池两头连起来，通电会爆炸！',
@@ -1460,6 +1524,7 @@
     pushHistory();
     state.parts = []; state.wires = []; state.nextId = 1;
     state.selection = null; state.diodeState = {};
+    state.caps = {};
     state.burnt = {}; state.heat = {};
     state.hospital = null;
     state.wires = preset.build();
@@ -1565,6 +1630,7 @@
     setWireColor: setWireColor, wireColors: WIRE_COLORS,
     setWireLabels: setWireLabels,
     recordMeasurement: recordMeasurement, clearLog: clearLog,
+    dischargeCap: dischargeCap,
     startGuide: startGuide, skipGuideStep: skipGuideStep, stopGuide: stopGuide, guideStep: guideStep,
     duplicateProps: duplicateProps,
     repairPart: repairPart, stressOf: stressOf, worstStress: worstStress,

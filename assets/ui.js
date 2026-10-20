@@ -1204,6 +1204,12 @@
       node.classList.toggle('is-hot', !burnt && heat > 0.02);
       node.classList.toggle('is-rev', !!(info && info.reversed) && !burnt);
       node.classList.toggle('is-short-path', !!shortParts[p.id] && !burnt);
+      /* 电容：把存电量变成罐子里的蓝色充电条 */
+      if (p.type === 'cap') {
+        var capCharge = App.state.caps ? Number(App.state.caps[p.id] || 0) : 0;
+        if (!isFinite(capCharge)) capCharge = info ? info.vdrop : 0;
+        node.style.setProperty('--charge', Math.min(1, Math.abs(capCharge) / 6).toFixed(2));
+      }
       /* 电流表和电压表上的数字：断电时显示 0 */
       if (p.type === 'ammeter' || p.type === 'voltmeter') {
         var read = node.querySelector('.meter-read');
@@ -1655,12 +1661,25 @@
     if (vol) vol.textContent = Math.abs(info.vdrop).toFixed(2) + ' V';
     var pow = body.querySelector('[data-live="power"]');
     if (pow) pow.textContent = (info.power * 1000).toFixed(0) + ' mW';
-    var dir = body.querySelector('[data-live="dir"]');
-    if (dir) {
-      var part = App.byId(sel.id);
-      if (part && part.type === 'motor') {
+    var part0 = App.byId(sel.id);
+    if (part0 && part0.type === 'motor') {
+      var dir = body.querySelector('[data-live="dir"]');
+      if (dir) {
         var c = info.current;
         dir.textContent = Math.abs(c) < 0.002 ? '停着' : (c > 0 ? '正转 ⟳' : '反转 ⟲');
+      }
+    }
+    if (part0 && part0.type === 'cap') {
+      var capV = App.state.caps ? App.state.caps[part0.id] : null;
+      if (!isFinite(capV)) capV = info.vdrop || 0;
+      var cv = body.querySelector('[data-live="capv"]');
+      if (cv) cv.textContent = Math.abs(capV).toFixed(2) + ' V';
+      var cs = body.querySelector('[data-live="capstate"]');
+      if (cs) {
+        var ci = info.current || 0;
+        cs.textContent = Math.abs(ci) > 0.0004
+          ? (ci > 0 ? '正在充电 ⚡' : '正在放电 🫗')
+          : (Math.abs(capV) > 0.05 ? '存着电' + (capV > 0 ? '（＋）' : '（－）') : '空空的');
       }
     }
   }
@@ -1753,6 +1772,16 @@
     } else if (part.type === 'switch') {
       html += '<div class="opt-row"><button class="opt' + (part.props.closed ? ' on' : '') + '" id="swToggle">' +
         (part.props.closed ? '已合上 · 点我断开' : '已断开 · 点我合上') + '</button></div>';
+    } else if (part.type === 'cap') {
+      var uFNow = Number(part.props.uF);
+      if (!(uFNow >= 10)) uFNow = 4700;
+      html += '<div class="opt-row">' + [1000, 2200, 4700, 10000].map(function (v) {
+        return '<button class="opt' + (uFNow === v ? ' on' : '') + '" data-uF="' + v + '">' + v + 'µF</button>';
+      }).join('') + '</div>' +
+        '<div class="readout"><span>存电量 <b data-live="capv">0.00 V</b></span>' +
+        '<span>状态 <b data-live="capstate">空空的</b></span></div>' +
+        '<div class="opt-row"><button class="opt" id="insDischarge">🫗 放掉电</button></div>' +
+        '<p class="inspect-desc">存电本领大的电容，充电时灯亮得久一点。想再看一次灯闪，点上面的「放掉电」。</p>';
     } else if (part.type === 'ldr') {
       var lightNow = Number(part.props.light);
       if (!(lightNow >= 0)) lightNow = 50;
@@ -1909,6 +1938,13 @@
     Array.prototype.forEach.call(body.querySelectorAll('[data-color]'), function (b) {
       on(b, 'click', function () { changeProp(part, 'color', b.dataset.color); });
     });
+    Array.prototype.forEach.call(body.querySelectorAll('[data-uF]'), function (b) {
+      on(b, 'click', function () { changeProp(part, 'uF', parseFloat(b.dataset.uF)); });
+    });
+    var dis = $('insDischarge');
+    if (dis) on(dis, 'click', function () {
+      if (App.dischargeCap(part.id)) { lastInspectKey = ''; renderInspector(); }
+    });
   }
   function changeProp(part, key, value) {
     if (part.props[key] === value) return;
@@ -1919,6 +1955,7 @@
     if (key === 'voltage') speak('电池改成' + value + '伏。');
     else if (key === 'resistance') speak('电阻改成' + App.fmtRes(value) + '。');
     else if (key === 'color') speak('LED 换颜色啦。');
+    else if (key === 'uF') speak('电容的存电本领调成' + value + '微法啦。');
   }
   function toggleSwitch(part) {
     App.pushHistory();

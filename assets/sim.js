@@ -10,6 +10,7 @@
   var SHORT_MIN_A = 0.5;  /* 拓扑上确实抄了近路，而且真的有大电流，才算短路 */
   var CONDUCTOR_R = 0.2;  // 开关 / 保险丝 / 电流表 / 面包板这类「导线级」内阻
   var LEAK_G = 1e-9;      // 防止孤岛矩阵奇异
+  var CAP_DT = 0.12;      /* 电容的时间步长（秒）：每次求解 = 电容往前充 0.12 秒 */
 
   /* 哪些零件算「用电器」：只要有一路电流正经流过用电器，就不算短路 */
   var LOAD_TYPES = { resistor: 1, ldr: 1, pot: 1, lamp: 1, led: 1, buzzer: 1, motor: 1 };
@@ -60,9 +61,13 @@
   }
 
   /**
-   * simulate({parts, wires, defOf, diodeState, burnt})
-   * 返回 {terminalV, parts:{id:{...}}, wires:{id:{current}}, batteries, totalCurrent, short, diodeState, maxWire}
+   * simulate({parts, wires, defOf, diodeState, burnt, caps, dt})
+   * 返回 {terminalV, parts:{id:{...}}, wires:{id:{current}}, batteries, totalCurrent, short, diodeState, caps, maxWire}
    * burnt: {零件id: true} —— 烧坏的零件相当于断开，不导电
+   * caps: {零件id: 存的电压} —— 电容上一刻的电压（伏）。dt=0 表示暂定，电容不充放电。
+   * 电容用「后向欧拉」的伴生模型求解：
+   *   电导 g = C/dt，加上一个把上刻电压送回去的内部电流源。
+   *   直观效果：充电时电流先大后小，充满了就挡住直流。
    */
   function simulate(opts) {
     var parts = opts.parts || [];
@@ -70,6 +75,9 @@
     var defOf = opts.defOf;
     var prevDiode = opts.diodeState || {};
     var burnt = opts.burnt || {};
+    var capsIn = opts.caps || {};
+    var capDt = opts.dt === 0 ? 0 : (typeof opts.dt === 'number' ? opts.dt : CAP_DT);
+    var capsOut = {};
     /* 烧坏的零件内部断开（相当于拔掉了） */
     function partModel(p) { return burnt[p.id] ? [] : partEdges(p, defOf(p)); }
 
@@ -124,6 +132,17 @@
             if (diodeKeys.indexOf(dk) < 0) diodeKeys.push(dk);
             if (diodeOn[dk]) { R = Math.max(e.rf || 10, 1e-4); vf = e.vf || 0; }
             else R = Math.max(e.rr || 1e9, 1e3);
+          } else if (e.kind === 'capacitor') {
+            if (capDt <= 0) return;   /* 暂停：电容存着电但不充放电（当作断开） */
+            var g2 = Math.max(e.c || 0.0047, 1e-7) / capDt;
+            var vprev = Number(capsIn[p.id]);
+            if (!isFinite(vprev)) vprev = 0;
+            if (vprev > 15) vprev = 15; else if (vprev < -15) vprev = -15;
+            var a = node(tkey(p.id, e.a)), c = node(tkey(p.id, e.b));
+            A[a][a] += g2; A[c][c] += g2; A[a][c] -= g2; A[c][a] -= g2;
+            /* 内部电流源把上一刻的电压送回节点：电容的「记忆」藏在这里 */
+            b[a] += g2 * vprev; b[c] -= g2 * vprev;
+            return;
           } else return;
           var g = 1 / R;
           var a = node(tkey(p.id, e.a)), c = node(tkey(p.id, e.b));
@@ -184,7 +203,7 @@
       });
       if (!changed || it === 9) {
         /* 保存最后解 */
-        var result = buildResult(x, N, parts, validWires, batteryEdges, defOf, node, tkey, diodeOn, diodeKeys, burnt, partModel);
+        var result = buildResult(x, N, parts, validWires, batteryEdges, defOf, node, tkey, diodeOn, diodeKeys, burnt, partModel, capsIn, capsOut, capDt);
         return result;
       }
     }
@@ -266,12 +285,12 @@
     return null;
   }
 
-  function buildResult(x, N, parts, wires, batteries, defOf, node, tkey, diodeOn, diodeKeys, burnt, partModel) {
+  function buildResult(x, N, parts, wires, batteries, defOf, node, tkey, diodeOn, diodeKeys, burnt, partModel, capsIn, capsOut, capDt) {
     burnt = burnt || {};
     var res = {
       terminalV: new Map(), parts: {}, wires: {}, batteries: [],
       totalCurrent: 0, short: false, shortInfo: null, maxWire: null, diodeState: {},
-      maxLoadCurrent: 0
+      maxLoadCurrent: 0, caps: (capsOut = capsOut || {})
     };
     for (var i = 0; i < N; i++) {
       // keys not kept here; store by node index instead
@@ -304,11 +323,23 @@
           info.conducting = info.conducting || on;
           if (on) info.forwardV = vf;
           if (!on && (va - vc) < -0.4) info.reversed = true;
+        } else if (e.kind === 'capacitor') {
+          /* 电容：存下来的电压留在两级之间；存电多少记录在 caps 里 */
+          capsOut[p.id] = va - vc;
+          info.vdrop = va - vc;
+          if (capDt > 0) {
+            var g3 = Math.max(e.c || 0.0047, 1e-7) / capDt;
+            var oldV = Number(capsIn[p.id]);
+            if (!isFinite(oldV)) oldV = 0;
+            I = g3 * ((va - vc) - oldV);
+            info.conducting = Math.abs(I) > 1e-6;
+          }
         } else return;
         if (Math.abs(I) > Math.abs(info.current)) info.current = I;
         info.vdrop = va - vc;
-        /* 真实消耗的功率：电阻是 I²R，二极管是 压降×电流 */
-        info.power += Math.abs(I * (va - vc));
+        /* 真实消耗的功率：电阻是 I²R，二极管是 压降×电流；
+           电容存电不发热，功率算 0 */
+        if (e.kind !== 'capacitor') info.power += Math.abs(I * (va - vc));
       });
       if (p.type === 'led' || p.type === 'lamp' || p.type === 'buzzer' || p.type === 'motor' || p.type === 'diode') {
         var a2 = Math.abs(info.current);

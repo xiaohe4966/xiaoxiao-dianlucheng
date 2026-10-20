@@ -191,6 +191,41 @@
       }
     },
 
+    /* 电容：存电的小罐子。充电电流先大后小，充满以后挡住直流。
+       这是一颗不怕接反的大号瓷片电容，小朋友不用担心极性。 */
+    cap: {
+      name: '电容', short: '电容', w: 150, h: 104,
+      terms: [{ id: 'a', x: 10, y: 66 }, { id: 'b', x: 140, y: 66 }],
+      model: function (p) {
+        var uF = Number(p.props.uF);
+        if (!isFinite(uF) || uF < 10) uF = 4700;
+        uF = Math.min(22000, Math.max(10, uF));
+        return { kind: 'capacitor', a: 'a', b: 'b', c: uF * 0.000001 };
+      },
+      spec: {
+        text: function (p) {
+          var uF = Number(p.props.uF);
+          if (!isFinite(uF) || uF < 10) uF = 4700;
+          return '存电 ' + uF + ' 微法（耐压 16V）· 充满后挡住直流';
+        }
+      },
+      art: function (p) {
+        var uF = Number(p.props.uF);
+        if (!isFinite(uF) || uF < 10) uF = 4700;
+        return svg(150, 104,
+          '<text x="75" y="16" text-anchor="middle" font-size="12" font-weight="800" fill="#6b7280">电容</text>' +
+          '<line x1="10" y1="66" x2="30" y2="66" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+          '<line x1="120" y1="66" x2="140" y2="66" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+          '<rect x="30" y="40" width="90" height="52" rx="10" fill="#e8f4ff" stroke="#1f2a3a" stroke-width="3"/>' +
+          '<rect class="cap-fill" x="34" y="76" width="82" height="10" rx="5" fill="#38bdf8"/>' +
+          '<line x1="66" y1="50" x2="66" y2="94" stroke="#0f766e" stroke-width="5" stroke-linecap="round"/>' +
+          '<line x1="78" y1="50" x2="78" y2="94" stroke="#0f766e" stroke-width="5" stroke-linecap="round"/>' +
+          '<line x1="34" y1="72" x2="116" y2="72" stroke="#93c5fd" stroke-width="2"/>' +
+          '<text x="75" y="66" text-anchor="middle" font-size="11" font-weight="900" fill="#0f766e">µF</text>' +
+          '<text x="75" y="104" text-anchor="middle" font-size="12" font-weight="900" fill="#7a6a52">' + uF + ' 微法</text>');
+      }
+    },
+
     led: {
       name: 'LED 灯', short: 'LED', w: 132, h: 136,
       terms: [{ id: 'an', x: 16, y: 112, label: '+', tone: 'pos' }, { id: 'ca', x: 116, y: 112 }],
@@ -417,6 +452,7 @@
     button: '<svg viewBox="0 0 64 40"><path d="M6 27h8M50 27h8" stroke="#8c8c8c" stroke-width="4" stroke-linecap="round"/><rect x="14" y="14" width="36" height="24" rx="8" fill="#e3e8ee" stroke="#22314a" stroke-width="2.6"/><circle cx="32" cy="28" r="8.5" fill="#ef4444" stroke="#22314a" stroke-width="2.4"/></svg>',
     ldr: '<svg viewBox="0 0 64 40"><path d="M4 22h10M50 22h10" stroke="#9aa7b8" stroke-width="4" stroke-linecap="round"/><rect x="14" y="13" width="36" height="18" rx="8" fill="#f3e3b8" stroke="#22314a" stroke-width="2.4"/><path d="M19 22q4-7 8 0t8 0t8 0" fill="none" stroke="#b45309" stroke-width="2.4"/><circle cx="47" cy="8" r="4" fill="#ffd166"/><path d="M47 1v-2M54 8h3M40 8h-3" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/></svg>',
     pot: '<svg viewBox="0 0 64 40"><path d="M6 28h8M50 28h8" stroke="#9aa7b8" stroke-width="4" stroke-linecap="round"/><rect x="14" y="20" width="36" height="16" rx="6" fill="#f0dcc0" stroke="#22314a" stroke-width="2.4"/><circle cx="32" cy="12" r="7" fill="#94a3b8" stroke="#22314a" stroke-width="2.2"/><path d="M32 19v2" stroke="#22314a" stroke-width="2.4"/><path d="M32 24l-3.5-5h7z" fill="#22314a"/></svg>',
+    cap: '<svg viewBox="0 0 64 40"><path d="M6 20h8M50 20h8" stroke="#9aa7b8" stroke-width="4" stroke-linecap="round"/><rect x="14" y="10" width="36" height="20" rx="6" fill="#e8f4ff" stroke="#22314a" stroke-width="2.4"/><line x1="27" y1="14" x2="27" y2="26" stroke="#0f766e" stroke-width="3" stroke-linecap="round"/><line x1="34" y1="14" x2="34" y2="26" stroke="#0f766e" stroke-width="3" stroke-linecap="round"/><path d="M42 14q3 6 0 12" fill="none" stroke="#38bdf8" stroke-width="2.4" stroke-linecap="round"/></svg>',
     fuse: '<svg viewBox="0 0 64 40"><path d="M4 20h8M52 20h8" stroke="#9aa7b8" stroke-width="4" stroke-linecap="round"/><rect x="12" y="10" width="40" height="20" rx="8" fill="#e0f2fe" stroke="#22314a" stroke-width="2.4"/><rect x="12" y="12" width="7" height="16" rx="3" fill="#cbd5e1" stroke="#22314a" stroke-width="2"/><rect x="45" y="12" width="7" height="16" rx="3" fill="#cbd5e1" stroke="#22314a" stroke-width="2"/><path d="M19 20h26" stroke="#f59e0b" stroke-width="3" stroke-linecap="round"/></svg>',
     ammeter: '<svg viewBox="0 0 64 40"><circle cx="32" cy="20" r="15" fill="#fffdf8" stroke="#22314a" stroke-width="2.6"/><path d="M32 20l-7-9" stroke="#ef4444" stroke-width="2.6" stroke-linecap="round"/><text x="32" y="31" text-anchor="middle" font-size="12" font-weight="900" fill="#0f766e">A</text></svg>',
     voltmeter: '<svg viewBox="0 0 64 40"><circle cx="32" cy="20" r="15" fill="#fffdf8" stroke="#22314a" stroke-width="2.6"/><path d="M32 20l-8-8" stroke="#0f766e" stroke-width="2.6" stroke-linecap="round"/><text x="32" y="31" text-anchor="middle" font-size="12" font-weight="900" fill="#1d4ed8">V</text></svg>',
@@ -430,6 +466,7 @@
     resistor: { resistance: 100 },
     ldr: { light: 50 },
     pot: { resistance: 500 },
+    cap: { uF: 4700 },
     led: { color: '#ff5d5d' },
     lamp: {}, buzzer: {}, diode: {}, fuse: {}, motor: {}, ammeter: {}, voltmeter: {}, breadboard: {}
   };
@@ -465,6 +502,11 @@
       what: '可变电阻是一个能拧大拧小的减速带。电阻变小，电流变大，灯就更亮。',
       how: '两个接线柱接在电路里。点住它，再拖动滑块，就能改变电阻的大小：最小 0 欧姆，最大 1 千欧。',
       tip: '把它和 LED 手拉手串在一起，就变成能调亮度的台灯啦。它最大 1000 欧姆，能承受 1/4 瓦，电阻调得太小、电流太大，它也会发烫烧坏。'
+    },
+    cap: {
+      what: '电容是存电的小罐子。充电的时候电流先大后小，串在电路里的灯泡会先亮、再慢慢变暗，就像往罐子里倒水。',
+      how: '把它和灯泡或 LED 手拉手串在一圈里，通电就能看到充电的样子。这颗是不怕接反的瓷片电容，两根线随便接。',
+      tip: '存满以后直流电就被挡住，电流变成 0，这是它的本领不是断线。点一下电容可以调存电本领（一万微法存得最久），也可以点「放掉电」再看一次灯闪。'
     },
     led: {
       what: 'LED 是一种小灯泡，电流通过时它会发光，而且很省电。',
@@ -530,7 +572,7 @@
     PART_GUIDES: PART_GUIDES,
     specTextOf: specTextOf,
     ledVf: ledVf,
-    PART_ORDER: ['battery', 'wire', 'switch', 'button', 'led', 'resistor', 'ldr', 'lamp', 'motor', 'buzzer', 'pot', 'fuse', 'diode', 'ammeter', 'voltmeter', 'breadboard'],
+    PART_ORDER: ['battery', 'wire', 'switch', 'button', 'led', 'resistor', 'ldr', 'lamp', 'motor', 'buzzer', 'pot', 'cap', 'fuse', 'diode', 'ammeter', 'voltmeter', 'breadboard'],
     CHIP_ICONS: CHIP_ICONS,
     DEFAULT_PROPS: DEFAULT_PROPS,
     fmtR: fmtR

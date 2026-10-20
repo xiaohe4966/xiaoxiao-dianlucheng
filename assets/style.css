@@ -364,9 +364,11 @@ button{font:inherit}
 .wire-gap{fill:none;stroke:var(--paper);stroke-width:16;stroke-linecap:round;pointer-events:none}
 /* 几根线接在同一个接线柱上时的实心连接点 */
 .wire-junctions{pointer-events:none}
-.junction-dot{fill:#22314a;stroke:#fffdf7;stroke-width:2;opacity:.92}
+.junction-dot{fill:#22314a;stroke:var(--paper);stroke-width:2;opacity:.92}
 /* 选中电线后可以换颜色 */
 .color-row{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 2px}
+/* 电容罐子里的充电条：由 JS 设置 --charge（0～1），从左边涨上来 */
+.part .cap-fill{transform-origin:34px 86px;transform:scaleX(var(--charge,0));transition:transform .28s linear}
 .wire-color-chip{
   width:24px;height:24px;border-radius:8px;border:2px solid rgba(34,49,74,.25);
   background:var(--chip);cursor:pointer;padding:0;transition:transform .12s,box-shadow .12s;
