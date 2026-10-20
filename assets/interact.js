@@ -109,12 +109,32 @@
   function setTargets(on) {
     Array.prototype.forEach.call(document.querySelectorAll('.terminal'), function (n) { n.classList.toggle('wire-target', on); });
   }
-  function showPreview(from, to) {
+  function showPreview(from, to, target) {
     var pa = App.byId(from.part);
     if (!pa) return;
     var p1 = App.termPos(pa, from.term);
+    var fromDef = PARTS[pa.type];
     var skip = {}; skip[from.part] = 1;
-    var d = UI.pathD(p1, to, UI.wireObstacles(skip));
+    var ownRects = [];
+    if (fromDef && pa.type !== 'breadboard') {
+      ownRects.push({ x1: pa.x - 9, y1: pa.y - 9, x2: pa.x + fromDef.w + 9, y2: pa.y + fromDef.h + 9 });
+    }
+    var toPartId = null;
+    if (target && !(target.part === from.part && target.term === from.term)) {
+      var pb = App.byId(target.part);
+      if (pb) {
+        var pbDef = PARTS[pb.type];
+        to = App.termPos(pb, target.term);
+        skip[pb.id] = 1;
+        toPartId = pb.id;
+        if (pbDef && pb.type !== 'breadboard') {
+          ownRects.push({ x1: pb.x - 9, y1: pb.y - 9, x2: pb.x + pbDef.w + 9, y2: pb.y + pbDef.h + 9 });
+        }
+      }
+    }
+    var d = UI.pathD(p1, to, UI.wireObstacles(skip), {
+      fromPart: from.part, toPart: toPartId, ownRects: ownRects
+    });
     UI.el.previewGroup.innerHTML = '<path class="preview-path" d="' + d + '"/>';
   }
   function toggleWireMode(chip) {
@@ -157,8 +177,9 @@
       if (dist(e.clientX, e.clientY, drag.sx, drag.sy) > 6) drag.moved = true;
       var ws = App.state.wireStart; if (!ws) return;
       var pt = toStage(e.clientX, e.clientY);
-      showPreview(ws, pt);
       var t = terminalAt(e.clientX, e.clientY);
+      var target = t ? { part: t.dataset.part, term: t.dataset.term } : null;
+      showPreview(ws, pt, target);
       Array.prototype.forEach.call(document.querySelectorAll('.terminal.hover-target'), function (n) { n.classList.remove('hover-target'); });
       if (t && !(t.dataset.part === ws.part && t.dataset.term === ws.term)) t.classList.add('hover-target');
     }

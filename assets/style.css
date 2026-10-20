@@ -47,6 +47,8 @@ button{font:inherit}
 .btn:hover{transform:translateY(-1px)}
 .btn:active{transform:translateY(2px);box-shadow:none}
 .btn.ghost{background:rgba(255,255,255,.75);font-size:13.5px}
+.wire-style-btn.active{background:#def7ee;border-color:#0f766e;color:#0f766e;box-shadow:0 3px 0 rgba(15,118,110,.28)}
+.wire-style-btn.active:hover{background:#d2f3e7}
 .btn.run{
   background:linear-gradient(180deg,#ffa94d,#ff8a3d);color:#fff;font-size:16px;
   padding:9px 21px;box-shadow:0 5px 0 var(--orange-d);text-shadow:0 1px 0 rgba(0,0,0,.14);
@@ -272,10 +274,10 @@ button{font:inherit}
 @keyframes shortFlash{from{box-shadow:0 0 0 rgba(239,68,68,0)}to{box-shadow:0 0 34px rgba(239,68,68,.85)}}
 
 /* ---------- 电线 ---------- */
-.wire-hit{fill:none;stroke:transparent;stroke-width:24;stroke-linecap:round;pointer-events:stroke;cursor:pointer}
-.wire-case{fill:none;stroke:#f1e9d9;stroke-width:12;stroke-linecap:round}
-.wire-core{fill:none;stroke:var(--wire,#c8bfa9);stroke-width:6;stroke-linecap:round;transition:stroke .2s,stroke-width .15s}
-.wire-flow{fill:none;stroke:#ffffff;stroke-width:3.6;stroke-linecap:round;stroke-dasharray:2 20;opacity:0}
+.wire-hit{fill:none;stroke:transparent;stroke-width:24;stroke-linecap:round;stroke-linejoin:round;pointer-events:stroke;cursor:pointer}
+.wire-case{fill:none;stroke:#f1e9d9;stroke-width:12;stroke-linecap:round;stroke-linejoin:round}
+.wire-core{fill:none;stroke:var(--wire,#c8bfa9);stroke-width:6;stroke-linecap:round;stroke-linejoin:round;transition:stroke .2s,stroke-width .15s}
+.wire-flow{fill:none;stroke:#ffffff;stroke-width:3.6;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:2 20;opacity:0}
 .wire.active .wire-flow{opacity:1;animation:wireFlow .42s linear infinite}
 @keyframes wireFlow{to{stroke-dashoffset:-22}}
 .wire.active .wire-core{filter:drop-shadow(0 0 4px var(--wire))}
@@ -293,7 +295,7 @@ button{font:inherit}
 .wire-x text{font-size:23px;font-weight:900;fill:#b91c1c;pointer-events:none}
 .wire-x:hover circle{fill:#ffe4e4;stroke:#7f1d1d}
 .wire-x:active circle{transform:scale(.94)}
-.preview-path{fill:none;stroke:var(--orange);stroke-width:5;stroke-linecap:round;stroke-dasharray:9 8;animation:wireFlow .5s linear infinite;opacity:.9}
+.preview-path{fill:none;stroke:var(--orange);stroke-width:5;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:9 8;animation:wireFlow .5s linear infinite;opacity:.9}
 
 /* ---------- 爆炸 ---------- */
 .boom{position:absolute;transform:translate(-50%,-50%);width:0;height:0}

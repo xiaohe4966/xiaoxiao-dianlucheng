@@ -5,8 +5,12 @@
   var el = {};
   var partEls = {};
   var wireVisuals = {};
+  var lastWireSig = '';
+  var lastWirePaths = null;
   var lastSpokenProblem = '';
   var lastProblemCode = '';
+  var lastInspectKey = '';
+  var lastTaskKey = null;
   var explainTimer = null;
   var autoProblemTimer = null;
   var revealTimer = null;
@@ -23,6 +27,14 @@
   function speakAuto(text) {
     if (global.Voice) return Voice.speak(text, { auto: true });
     return false;
+  }
+  /* 用户主动点「听讲解 / 听问题」时，如果朗读被关掉了，就直接打开，
+     避免明明点了「听」却一点声音都没有。 */
+  function ensureVoice() {
+    if (global.Voice && Voice.supported() && !Voice.isEnabled()) {
+      Voice.setEnabled(true);
+      updateVoice();
+    }
   }
   function guideOf(type) { return (global.PART_GUIDES && PART_GUIDES[type]) || null; }
   function explainText(type, prefix) {
@@ -78,6 +90,7 @@
     el.btnRun = $('btnRun');
     el.runText = $('runText');
     el.btnUndo = $('btnUndo');
+    el.btnWireStyle = $('btnWireStyle');
     el.btnSound = $('btnSound');
     el.btnVoice = $('btnVoice');
     el.voiceText = $('voiceText');
@@ -101,6 +114,9 @@
     on($('btnClear'), 'click', function () { App.clearBoard(); });
     on($('btnHelp'), 'click', showHelp);
     on($('btnExamples'), 'click', showExamples);
+    on(el.btnWireStyle, 'click', function () {
+      App.setWireStyle(App.state.wireStyle === 'ortho' ? 'curve' : 'ortho');
+    });
     on(el.btnSound, 'click', function () {
       App.audio.setEnabled(!App.state.sound);
       try { localStorage.setItem('xiaoxiao-dianlucheng-sound', App.state.sound ? 'on' : 'off'); } catch (e) {}
@@ -116,11 +132,12 @@
         else UI.toast('中文朗读关掉啦');
       }
     });
-    on(el.btnHearProblem, 'click', function () { speakProblem(true); });
+    on(el.btnHearProblem, 'click', function () { ensureVoice(); speakProblem(true); });
     on(el.btnListenDoctor, 'click', function () {
+      ensureVoice();
       speak(el.doctorBubble.getAttribute('data-speak') || el.doctorBubble.textContent || '');
     });
-    on(el.statusPill, 'click', function () { speakProblem(true); });
+    on(el.statusPill, 'click', function () { ensureVoice(); speakProblem(true); });
     on($('zoomIn'), 'click', function () { setZoom(App.state.zoom + 0.2); });
     on($('zoomOut'), 'click', function () { setZoom(App.state.zoom - 0.2); });
     on($('zoomFit'), 'click', function () { setZoom(1); });
@@ -297,21 +314,61 @@
       if (!seen[id]) { partEls[id].remove(); delete partEls[id]; }
     });
   }
+  /* 仿真时每 120ms 会刷新一次外观，但零件没动、电流方向没变时，
+     电线的走法不用重新算。这个签名就是用来复用上一次的路径的。 */
+  function wireRenderSig() {
+    var s = (App.state.wireStyle || 'curve') + '|';
+    App.state.parts.forEach(function (p) {
+      s += p.id + ':' + p.type + ':' + p.x + ':' + p.y + ';';
+    });
+    s += '|';
+    App.state.wires.forEach(function (w) {
+      var info = App.state.sim && App.state.sim.wires[w.id];
+      var rev = App.state.running && info && info.current < -0.0008 ? -1 : 1;
+      s += w.id + ':' + w.a.part + '.' + w.a.term + ':' + w.b.part + '.' + w.b.term + ':' + rev + ';';
+    });
+    return s;
+  }
   function renderWires() {
     var sim = App.state.sim;
     var running = App.state.running;
     var sel = App.state.selection;
     var html = '';
+    var sig = wireRenderSig();
+    var useCache = !!(lastWirePaths && lastWireSig === sig);
+    if (useCache) {
+      for (var ci = 0; ci < App.state.wires.length; ci++) {
+        if (!lastWirePaths[App.state.wires[ci].id]) { useCache = false; break; }
+      }
+    }
+    var paths = useCache ? lastWirePaths : {};
+    var used = [], usedCells = {};
     App.state.wires.forEach(function (w) {
       var ends = App.wireEnds(w); if (!ends) return;
       var info = sim && sim.wires[w.id];
       var cur = info ? info.current : 0;
       var active = running && Math.abs(cur) > 0.0008;
       var hot = (running || App.state.exploding) && Math.abs(cur) > CircuitSim.SHORT_A;
-      var p1 = ends[0], p2 = ends[1], tmp;
-      if (running && cur < -0.0008) { tmp = p1; p1 = p2; p2 = tmp; }
-      var skip = {}; skip[w.a.part] = 1; skip[w.b.part] = 1;
-      var d = pathD(p1, p2, wireObstacles(skip));
+      var d = useCache ? paths[w.id] : null;
+      if (!d) {
+        var p1 = ends[0], p2 = ends[1], fromPart = w.a.part, toPart = w.b.part, tmp;
+        if (running && cur < -0.0008) {
+          tmp = p1; p1 = p2; p2 = tmp;
+          tmp = fromPart; fromPart = toPart; toPart = tmp;
+        }
+        var skip = {}; skip[w.a.part] = 1; skip[w.b.part] = 1;
+        var ownRects = [];
+        [w.a.part, w.b.part].forEach(function (id) {
+          var part = App.byId(id); if (!part) return;
+          var def = PARTS[part.type]; if (!def || part.type === 'breadboard') return;
+          ownRects.push({ x1: part.x - 9, y1: part.y - 9, x2: part.x + def.w + 9, y2: part.y + def.h + 9 });
+        });
+        d = pathD(p1, p2, wireObstacles(skip), {
+          fromPart: fromPart, toPart: toPart, ownRects: ownRects,
+          used: used, usedCells: usedCells
+        });
+        paths[w.id] = d;
+      }
       var dots = '';
       var g = '<g class="wire ' + (active ? 'active' : 'idle') + (hot ? ' hot' : '') +
         ((sel && sel.kind === 'wire' && sel.id === w.id) ? ' selected' : '') +
@@ -323,6 +380,8 @@
         '</g>';
       html += g;
     });
+    lastWireSig = sig;
+    lastWirePaths = paths;
     el.wiresGroup.innerHTML = html;
     wireVisuals = {};
     Array.prototype.forEach.call(el.wiresGroup.querySelectorAll('.wire'), function (g) {
@@ -398,7 +457,7 @@
     }
     return score;
   }
-  function pathD(p1, p2, rects) {
+  function curvePathD(p1, p2, rects) {
     var dx = p2.x - p1.x, dy = p2.y - p1.y;
     var dist = Math.sqrt(dx * dx + dy * dy) || 1;
     var nx = -dy / dist, ny = dx / dist;
@@ -423,6 +482,385 @@
       /* 实在绕不开（比如零件围成一圈），就用「挡住最少」的那条曲线 */
     }
     return 'M ' + r1(p1.x) + ' ' + r1(p1.y) + ' Q ' + r1(mx) + ' ' + r1(my) + ' ' + r1(p2.x) + ' ' + r1(p2.y);
+  }
+
+  /* ---------- 横竖走线（正交 / 曼哈顿布线） ----------
+     小朋友线一多就容易看花。这个模式让电线只走横线和竖线：
+     1. 先从接线柱往外伸一小段，避免从零件里面钻出来；
+     2. 先生成几条简单的 L 形 / Z 形路线；
+     3. 用「穿零件、跑出工作台、和别的线重叠、拐弯太多」给它们打分；
+     4. 简单路线都绕不开时，再用小网格 A* 找一条真正绕过零件的路。 */
+  function termNormal(partId, p) {
+    var part = App.byId(partId);
+    if (!part) return null;
+    var def = PARTS[part.type];
+    if (!def) return null;
+    /* 面包板的接线点在板子里面，上下出线更像真实的杜邦线 */
+    if (part.type === 'breadboard') {
+      return { x: 0, y: p.y < part.y + def.h / 2 ? -1 : 1 };
+    }
+    var dl = Math.abs(p.x - part.x);
+    var dr = Math.abs(p.x - (part.x + def.w));
+    var dt = Math.abs(p.y - part.y);
+    var db = Math.abs(p.y - (part.y + def.h));
+    var m = Math.min(dl, dr, dt, db);
+    if (m === dl) return { x: -1, y: 0 };
+    if (m === dr) return { x: 1, y: 0 };
+    if (m === dt) return { x: 0, y: -1 };
+    return { x: 0, y: 1 };
+  }
+  function facingNormal(p, q) {
+    var dx = q.x - p.x, dy = q.y - p.y;
+    if (Math.abs(dx) >= Math.abs(dy)) return { x: dx >= 0 ? 1 : -1, y: 0 };
+    return { x: 0, y: dy >= 0 ? 1 : -1 };
+  }
+  function sameNum(a, b) { return Math.abs(a - b) < 0.01; }
+  function cleanOrtho(pts) {
+    var out = [], i;
+    for (i = 0; i < pts.length; i++) {
+      var p = { x: r1(pts[i].x), y: r1(pts[i].y) };
+      if (!out.length || !sameNum(p.x, out[out.length - 1].x) || !sameNum(p.y, out[out.length - 1].y)) out.push(p);
+    }
+    for (i = 1; i < out.length - 1;) {
+      var a = out[i - 1], b = out[i], c = out[i + 1];
+      var sameX = sameNum(a.x, b.x) && sameNum(b.x, c.x);
+      var sameY = sameNum(a.y, b.y) && sameNum(b.y, c.y);
+      var forward = sameX ? (c.y - b.y) * (b.y - a.y) >= 0 : (c.x - b.x) * (b.x - a.x) >= 0;
+      var reverseLen = sameX ? Math.min(Math.abs(b.y - a.y), Math.abs(c.y - b.y)) :
+        (sameY ? Math.min(Math.abs(b.x - a.x), Math.abs(c.x - b.x)) : 0);
+      /* 很短的「回头路」只是网格对齐留下的小毛刺，直接抹平；
+         真正绕过障碍的大幅折返要保留。 */
+      if ((sameX || sameY) && (forward || reverseLen < 6)) out.splice(i, 1);
+      else i++;
+    }
+    return out;
+  }
+  function pointsToPath(pts) {
+    var d = 'M ' + r1(pts[0].x) + ' ' + r1(pts[0].y);
+    for (var i = 1; i < pts.length; i++) d += ' L ' + r1(pts[i].x) + ' ' + r1(pts[i].y);
+    return d;
+  }
+  function orthoSegments(pts) {
+    var segs = [];
+    for (var i = 0; i < pts.length - 1; i++) {
+      var a = pts[i], b = pts[i + 1];
+      if (sameNum(a.x, b.x) && sameNum(a.y, b.y)) continue;
+      segs.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, h: sameNum(a.y, b.y) });
+    }
+    return segs;
+  }
+  function segHitsRect(s, r) {
+    if (s.h) {
+      var y = s.y1;
+      if (y <= r.y1 || y >= r.y2) return false;
+      return Math.max(s.x1, s.x2) > r.x1 + 0.01 && Math.min(s.x1, s.x2) < r.x2 - 0.01;
+    }
+    var x = s.x1;
+    if (x <= r.x1 || x >= r.x2) return false;
+    return Math.max(s.y1, s.y2) > r.y1 + 0.01 && Math.min(s.y1, s.y2) < r.y2 - 0.01;
+  }
+  function segClear(x1, y1, x2, y2, rects) {
+    for (var i = 0; i < rects.length; i++) {
+      var r = rects[i];
+      if (sameNum(y1, y2)) {
+        if (y1 > r.y1 && y1 < r.y2 &&
+            Math.max(x1, x2) > r.x1 + 0.01 && Math.min(x1, x2) < r.x2 - 0.01) return false;
+      } else if (sameNum(x1, x2)) {
+        if (x1 > r.x1 && x1 < r.x2 &&
+            Math.max(y1, y2) > r.y1 + 0.01 && Math.min(y1, y2) < r.y2 - 0.01) return false;
+      }
+    }
+    return true;
+  }
+  function pointBlocked(x, y, rects) {
+    for (var i = 0; i < rects.length; i++) {
+      var r = rects[i];
+      if (x > r.x1 && x < r.x2 && y > r.y1 && y < r.y2) return true;
+    }
+    return false;
+  }
+  function segOverlapLen(a, b) {
+    if (a.h && b.h && Math.abs(a.y1 - b.y1) < 6) {
+      var lo = Math.max(Math.min(a.x1, a.x2), Math.min(b.x1, b.x2));
+      var hi = Math.min(Math.max(a.x1, a.x2), Math.max(b.x1, b.x2));
+      return Math.max(0, hi - lo);
+    }
+    if (!a.h && !b.h && Math.abs(a.x1 - b.x1) < 6) {
+      var lo2 = Math.max(Math.min(a.y1, a.y2), Math.min(b.y1, b.y2));
+      var hi2 = Math.min(Math.max(a.y1, a.y2), Math.max(b.y1, b.y2));
+      return Math.max(0, hi2 - lo2);
+    }
+    return 0;
+  }
+  function segPerpCross(a, b) {
+    if (a.h === b.h) return false;
+    var h = a.h ? a : b, v = a.h ? b : a;
+    return v.x1 > Math.min(h.x1, h.x2) + 0.01 && v.x1 < Math.max(h.x1, h.x2) - 0.01 &&
+      h.y1 > Math.min(v.y1, v.y2) + 0.01 && h.y1 < Math.max(v.y1, v.y2) - 0.01;
+  }
+  function scoreOrthoPath(pts, rects, ownRects, used) {
+    var segs = orthoSegments(pts);
+    var hits = 0, out = 0, overlap = 0, cross = 0, length = 0, i, j, s;
+    for (i = 0; i < segs.length; i++) {
+      s = segs[i];
+      length += Math.abs(s.x2 - s.x1) + Math.abs(s.y2 - s.y1);
+      /* 电线头两小段是「从接线柱伸出来」的，自己的零件不算挡路；
+         但别的零件、以及中间所有路段都要躲开。 */
+      for (j = 0; j < rects.length; j++) {
+        if (segHitsRect(s, rects[j])) { hits++; break; }
+      }
+      if (ownRects && ownRects.length && i > 0 && i < segs.length - 1) {
+        for (j = 0; j < ownRects.length; j++) {
+          if (segHitsRect(s, ownRects[j])) { hits++; break; }
+        }
+      }
+      if (Math.min(s.x1, s.x2) < 4 || Math.max(s.x1, s.x2) > 1196 ||
+          Math.min(s.y1, s.y2) < 4 || Math.max(s.y1, s.y2) > 756) out++;
+    }
+    if (used && used.length) {
+      for (i = 1; i < segs.length - 1; i++) {
+        for (j = 0; j < used.length; j++) {
+          overlap += segOverlapLen(segs[i], used[j]);
+          if (segPerpCross(segs[i], used[j])) cross++;
+        }
+      }
+    }
+    /* 自己的线也不能来回叠在一起，否则看起来像打了个小圈 */
+    var selfOverlap = 0;
+    for (i = 0; i < segs.length; i++) {
+      for (j = i + 1; j < segs.length; j++) selfOverlap += segOverlapLen(segs[i], segs[j]);
+    }
+    var bends = Math.max(0, pts.length - 2);
+    return {
+      pts: pts, segs: segs, hits: hits, out: out, overlap: overlap, cross: cross,
+      selfOverlap: selfOverlap, length: length, bends: bends,
+      score: hits * 120000 + out * 4000 + overlap * 2.2 + cross * 14 +
+        selfOverlap * 50 + bends * 28 + length * 0.06
+    };
+  }
+  function uniqNums(vals) {
+    var arr = [], i;
+    for (i = 0; i < vals.length; i++) {
+      if (typeof vals[i] === 'number' && isFinite(vals[i])) arr.push(vals[i]);
+    }
+    arr.sort(function (a, b) { return a - b; });
+    var out = [];
+    for (i = 0; i < arr.length; i++) {
+      var v = r1(arr[i]);
+      if (!out.length || Math.abs(v - out[out.length - 1]) > 0.01) out.push(v);
+    }
+    return out;
+  }
+  function uniqLanes(vals, lo, hi) {
+    var out = [], seen = {}, i;
+    for (i = 0; i < vals.length; i++) {
+      var v = r1(vals[i]);
+      if (!isFinite(v) || v < lo || v > hi) continue;
+      var k = String(v);
+      if (seen[k]) continue;
+      seen[k] = 1;
+      out.push(v);
+    }
+    return out;
+  }
+  function buildOrthoCandidates(p1, p2, n1, n2, rects, ownRects, used) {
+    /* 接线柱常常缩在零件边缘里面一点，伸出来的线头要够长，
+       才能完全离开「零件 + 9px 安全边」，后面的正交路线才好走。
+       两个接线柱离得很近时，线头自动缩短，避免两根线头互相越过、走出小回头路。 */
+    var ddx = p2.x - p1.x, ddy = p2.y - p1.y;
+    var dist = Math.sqrt(ddx * ddx + ddy * ddy) || 1;
+    var stub = Math.min(30, Math.max(4, dist * 0.25), Math.max(4, dist / 2 - 1));
+    var a = { x: r1(p1.x + n1.x * stub), y: r1(p1.y + n1.y * stub) };
+    var b = { x: r1(p2.x + n2.x * stub), y: r1(p2.y + n2.y * stub) };
+    var list = [], seen = {};
+    function add(mid) {
+      var pts = cleanOrtho([p1].concat(mid, [p2]));
+      if (pts.length < 2) return;
+      var d = pointsToPath(pts);
+      if (seen[d]) return;
+      seen[d] = 1;
+      list.push(scoreOrthoPath(pts, rects, ownRects, used));
+    }
+    if (sameNum(a.x, b.x) || sameNum(a.y, b.y)) add([a, b]);
+    add([a, { x: b.x, y: a.y }, b]);
+    add([a, { x: a.x, y: b.y }, b]);
+    var midX = (a.x + b.x) / 2, midY = (a.y + b.y) / 2;
+    var box = {
+      x1: Math.min(a.x, b.x) - 220, x2: Math.max(a.x, b.x) + 220,
+      y1: Math.min(a.y, b.y) - 220, y2: Math.max(a.y, b.y) + 220
+    };
+    var xl = [midX - 60, midX - 30, midX, midX + 30, midX + 60];
+    var yl = [midY - 60, midY - 30, midY, midY + 30, midY + 60];
+    for (var i = 0; i < rects.length; i++) {
+      var r = rects[i];
+      if (r.x2 < box.x1 || r.x1 > box.x2 || r.y2 < box.y1 || r.y1 > box.y2) continue;
+      xl.push(r.x1 - 16, r.x2 + 16);
+      yl.push(r.y1 - 16, r.y2 + 16);
+    }
+    xl.push(18, 1182); yl.push(18, 742);
+    xl = uniqLanes(xl, 8, 1192); yl = uniqLanes(yl, 8, 752);
+    xl.forEach(function (x) { add([a, { x: x, y: a.y }, { x: x, y: b.y }, b]); });
+    yl.forEach(function (y) { add([a, { x: a.x, y: y }, { x: b.x, y: y }, b]); });
+    return { a: a, b: b, list: list };
+  }
+  function cellKey(x, y) { return Math.floor(x / 14) + ',' + Math.floor(y / 14); }
+  function markOrthoUsed(pts, opts) {
+    if (!opts) return;
+    var segs = orthoSegments(pts), i;
+    if (opts.used) for (i = 0; i < segs.length; i++) opts.used.push(segs[i]);
+    if (!opts.usedCells) return;
+    for (i = 0; i < segs.length; i++) {
+      var s = segs[i];
+      var len = Math.abs(s.x2 - s.x1) + Math.abs(s.y2 - s.y1);
+      var steps = Math.max(1, Math.ceil(len / 8));
+      for (var j = 0; j <= steps; j++) {
+        var t = j / steps;
+        opts.usedCells[cellKey(s.x1 + (s.x2 - s.x1) * t, s.y1 + (s.y2 - s.y1) * t)] = 1;
+      }
+    }
+  }
+  function heapPush(heap, state, pri) {
+    var i = heap.length;
+    heap.push({ n: state, p: pri });
+    while (i > 0) {
+      var up = (i - 1) >> 1;
+      if (heap[up].p <= heap[i].p) break;
+      var t = heap[up]; heap[up] = heap[i]; heap[i] = t;
+      i = up;
+    }
+  }
+  function heapPop(heap) {
+    if (!heap.length) return null;
+    var top = heap[0], last = heap.pop();
+    if (heap.length) {
+      heap[0] = last;
+      var i = 0;
+      while (true) {
+        var l = i * 2 + 1, r = l + 1, small = i;
+        if (l < heap.length && heap[l].p < heap[small].p) small = l;
+        if (r < heap.length && heap[r].p < heap[small].p) small = r;
+        if (small === i) break;
+        var t = heap[i]; heap[i] = heap[small]; heap[small] = t;
+        i = small;
+      }
+    }
+    return top;
+  }
+  /* 小网格 A*：只在简单路线都绕不开零件时使用 */
+  function routeGrid(a, b, rects, opts) {
+    var xs = [], ys = [], i;
+    for (i = 12; i <= 1188; i += 20) xs.push(i);
+    for (i = 12; i <= 748; i += 20) ys.push(i);
+    xs.push(a.x, b.x); ys.push(a.y, b.y);
+    xs = uniqNums(xs); ys = uniqNums(ys);
+    var sx = xs.indexOf(a.x), sy = ys.indexOf(a.y);
+    var gx = xs.indexOf(b.x), gy = ys.indexOf(b.y);
+    if (sx < 0 || sy < 0 || gx < 0 || gy < 0) return null;
+    if (pointBlocked(a.x, a.y, rects) || pointBlocked(b.x, b.y, rects)) return null;
+    var nx = xs.length, ny = ys.length, xx, yy;
+    var blocked = new Uint8Array(nx * ny);
+    for (yy = 0; yy < ny; yy++) {
+      for (xx = 0; xx < nx; xx++) {
+        if (pointBlocked(xs[xx], ys[yy], rects)) blocked[yy * nx + xx] = 1;
+      }
+    }
+    var start = sy * nx + sx, goal = gy * nx + gx;
+    if (start === goal) return cleanOrtho([a, b]);
+    var total = nx * ny * 4;
+    var dist = new Float64Array(total); dist.fill(Infinity);
+    var prev = new Int32Array(total); prev.fill(-1);
+    var heap = [], d0;
+    var h0 = Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+    for (d0 = 0; d0 < 4; d0++) {
+      var s0 = start * 4 + d0;
+      dist[s0] = 0;
+      heapPush(heap, s0, h0);
+    }
+    var dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+    var TURN = 26, OVER = 4, finalState = -1;
+    while (heap.length) {
+      var st = heapPop(heap);
+      if (!st) break;
+      if (st.p > dist[st.n] + 0.001) continue;
+      var node = st.n >> 2, dir = st.n & 3;
+      if (node === goal) { finalState = st.n; break; }
+      var ix = node % nx, iy = (node / nx) | 0;
+      for (var k = 0; k < 4; k++) {
+        var jx = ix + dirs[k][0], jy = iy + dirs[k][1];
+        if (jx < 0 || jx >= nx || jy < 0 || jy >= ny) continue;
+        var jn = jy * nx + jx;
+        if (blocked[jn]) continue;
+        var x1 = xs[ix], y1 = ys[iy], x2 = xs[jx], y2 = ys[jy];
+        if (!segClear(x1, y1, x2, y2, rects)) continue;
+        var turn = k === dir ? 0 : TURN;
+        var nearEnd = Math.abs(x2 - a.x) + Math.abs(y2 - a.y) < 10 ||
+                      Math.abs(x2 - b.x) + Math.abs(y2 - b.y) < 10;
+        var occ = 0;
+        if (!nearEnd && opts && opts.usedCells) {
+          if (opts.usedCells[cellKey((x1 + x2) / 2, (y1 + y2) / 2)]) occ += OVER;
+          if (opts.usedCells[cellKey(x2, y2)]) occ += OVER;
+        }
+        /* 尽量别和已经画好的电线并排贴在一起；接线柱附近的共用线头除外 */
+        var ov = 0;
+        if (!nearEnd && opts && opts.used && opts.used.length) {
+          var edgeSeg = { x1: x1, y1: y1, x2: x2, y2: y2, h: sameNum(y1, y2) };
+          for (var ui = 0; ui < opts.used.length; ui++) ov += segOverlapLen(edgeSeg, opts.used[ui]);
+        }
+        var nd = dist[st.n] + Math.abs(x2 - x1) + Math.abs(y2 - y1) + turn + occ + ov * 2.2;
+        var ns = jn * 4 + k;
+        if (nd < dist[ns] - 0.001) {
+          dist[ns] = nd; prev[ns] = st.n;
+          heapPush(heap, ns, nd + Math.abs(b.x - x2) + Math.abs(b.y - y2));
+        }
+      }
+    }
+    if (finalState < 0) return null;
+    var nodes = [], cur = finalState;
+    while (cur !== -1) { nodes.push(cur >> 2); cur = prev[cur]; }
+    nodes.reverse();
+    var pts = [];
+    for (i = 0; i < nodes.length; i++) {
+      var ni = nodes[i], px = xs[ni % nx], py = ys[(ni / nx) | 0];
+      if (!pts.length || !sameNum(px, pts[pts.length - 1].x) || !sameNum(py, pts[pts.length - 1].y)) {
+        pts.push({ x: px, y: py });
+      }
+    }
+    return cleanOrtho(pts);
+  }
+  function orthoPathD(p1, p2, rects, opts) {
+    opts = opts || {};
+    var n1 = opts.n1 || (opts.fromPart ? termNormal(opts.fromPart, p1) : null);
+    var n2 = opts.n2 || (opts.toPart ? termNormal(opts.toPart, p2) : null);
+    if (!n1 || (!n1.x && !n1.y)) n1 = facingNormal(p1, p2);
+    if (!n2 || (!n2.x && !n2.y)) n2 = facingNormal(p2, p1);
+    var otherRects = rects || [];
+    var ownRects = opts.ownRects || [];
+    var allRects = otherRects.slice();
+    for (var i = 0; i < ownRects.length; i++) allRects.push(ownRects[i]);
+    var built = buildOrthoCandidates(p1, p2, n1, n2, otherRects, ownRects, opts.used);
+    var best = null, j;
+    for (j = 0; j < built.list.length; j++) {
+      if (!best || built.list[j].score < best.score) best = built.list[j];
+    }
+    if (!best || best.hits > 0 || best.out > 0 || best.overlap > 4) {
+      var grid = routeGrid(built.a, built.b, allRects, opts);
+      if (grid && grid.length) {
+        var pts = cleanOrtho([p1].concat(grid, [p2]));
+        var cand = scoreOrthoPath(pts, otherRects, ownRects, opts.used);
+        if (!best || cand.hits < best.hits ||
+            (cand.hits === best.hits && cand.out < best.out) ||
+            (cand.hits === best.hits && cand.out === best.out && cand.score < best.score)) {
+          best = cand;
+        }
+      }
+    }
+    if (!best) return curvePathD(p1, p2, otherRects);
+    markOrthoUsed(best.pts, opts);
+    return pointsToPath(best.pts);
+  }
+  function pathD(p1, p2, rects, opts) {
+    if (App.state.wireStyle === 'ortho') return orthoPathD(p1, p2, rects, opts);
+    return curvePathD(p1, p2, rects);
   }
   function r1(v) { return Math.round(v * 10) / 10; }
 
@@ -760,6 +1198,11 @@
   }
   function renderTasks() {
     if (!el.taskList) return;
+    /* 任务完成状态没变就不要重建；仿真每 120ms 刷新一次，
+       重建会让小朋友点任务时点空，也会把语音点击打断。 */
+    var key = (App.state.achieved || []).join(',');
+    if (key === lastTaskKey && el.taskList.children.length) return;
+    lastTaskKey = key;
     el.taskList.innerHTML = App.TASKS.map(function (t) {
       var done = App.state.achieved.indexOf(t.id) >= 0;
       return '<div class="task' + (done ? ' done' : '') + '" data-speak="' +
@@ -775,7 +1218,79 @@
   }
 
   /* ---------- 选中零件面板 ---------- */
-  function infoFor(partId) { var sim = App.state.sim; return sim && sim.parts[partId]; }
+  function infoFor(partId) {
+    var sim = App.state.sim;
+    var info = sim && sim.parts[partId];
+    if (!info || !sim || !sim.batteries) return info;
+    /* 电池的电流走的是内部支路，sim.parts 里恒为 0；
+       面板和讲解要显示真实的输出电流、端电压和功率。 */
+    var part = App.byId(partId);
+    if (part && part.type === 'battery') {
+      var b = null;
+      for (var i = 0; i < sim.batteries.length; i++) {
+        if (sim.batteries[i].partId === partId) { b = sim.batteries[i]; break; }
+      }
+      if (b) {
+        var copy = {};
+        for (var k in info) {
+          if (Object.prototype.hasOwnProperty.call(info, k)) copy[k] = info[k];
+        }
+        copy.current = b.current;
+        copy.vdrop = b.voltage;
+        copy.power = b.power;
+        return copy;
+      }
+    }
+    return info;
+  }
+
+  /* 面板里哪些东西一变就必须整个重建（按钮、控件、烧坏提示、参数行）。
+     电流 / 电压 / 功率这种每 120ms 都在变的数字不算在里面，用 updateInspectorLive 原地改，
+     这样仿真运行时不会一直重建按钮，小朋友点「听讲解」就不会点空。 */
+  function inspectKey(sel) {
+    var st = App.state;
+    if (!sel) return 'none';
+    if (sel.kind === 'wire') {
+      var w = st.wires.find(function (x) { return x.id === sel.id; });
+      if (!w) return 'wire-gone|' + sel.id;
+      var wi = st.sim && st.sim.wires[w.id];
+      return 'wire|' + w.id + '|' + (wi ? '1' : '0');
+    }
+    var part = App.byId(sel.id);
+    if (!part) return 'part-gone|' + sel.id;
+    var info = infoFor(part.id);
+    var b = st.burnt[part.id];
+    var bkey = b ? [b.kind, b.valueText, b.limitText].join('|') : '';
+    var props = '';
+    try { props = JSON.stringify(part.props || {}); } catch (e) { props = ''; }
+    return 'part|' + part.id + '|' + part.type + '|' + (info ? '1' : '0') + '|' + props + '|' + bkey;
+  }
+
+  function updateInspectorLive(sel) {
+    if (!sel) return;
+    var st = App.state;
+    var info = sel.kind === 'wire'
+      ? (st.sim && st.sim.wires[sel.id])
+      : (sel.kind === 'part' ? infoFor(sel.id) : null);
+    var body = el.inspectBody;
+    if (!body || !info) return;
+    var cur = body.querySelector('[data-live="current"]');
+    if (cur) cur.textContent = App.formatCurrent(info.current);
+    if (sel.kind !== 'part') return;
+    var vol = body.querySelector('[data-live="voltage"]');
+    if (vol) vol.textContent = Math.abs(info.vdrop).toFixed(2) + ' V';
+    var pow = body.querySelector('[data-live="power"]');
+    if (pow) pow.textContent = (info.power * 1000).toFixed(0) + ' mW';
+    var dir = body.querySelector('[data-live="dir"]');
+    if (dir) {
+      var part = App.byId(sel.id);
+      if (part && part.type === 'motor') {
+        var c = info.current;
+        dir.textContent = Math.abs(c) < 0.002 ? '停着' : (c > 0 ? '正转 ⟳' : '反转 ⟲');
+      }
+    }
+  }
+
   function renderInspector() {
     var st = App.state, sel = st.selection, body = el.inspectBody;
     /* 正在拖滑块 / 在输入框里打数字的时候不要重建面板，不然会松手、数字会被清掉 */
@@ -783,6 +1298,9 @@
     if (sel && sel.kind === 'part' && activeEl &&
         ((activeEl.id === 'potRange' && activeEl.dataset.part === sel.id) ||
          (activeEl.id === 'resInput' && activeEl.dataset.part === sel.id))) return;
+    var key = inspectKey(sel);
+    if (key === lastInspectKey) { updateInspectorLive(sel); return; }
+    lastInspectKey = key;
     if (!sel) {
       body.innerHTML = '<p class="muted">点一个零件或一根电线，就能在这里看到它的小秘密。</p>';
       return;
@@ -795,13 +1313,13 @@
         '<div class="inspect-title">🪢 电线</div>' +
         '<p class="inspect-desc">把两个零件连起来，电流才能通过。</p>' +
         '<p class="inspect-more">' + descFor('wire') + '</p>' +
-        '<div class="readout">' + (info ? '<span>电流 <b>' + App.formatCurrent(info.current) + '</b></span>' : '') + '</div>' +
+        '<div class="readout">' + (info ? '<span>电流 <b data-live="current">' + App.formatCurrent(info.current) + '</b></span>' : '') + '</div>' +
         '<p class="spec-line">📏 载流约 1A，电阻很小</p>' +
         '<div class="inspect-actions">' +
         '<button class="btn small" id="insSay">🔊 听讲解</button>' +
         '<button class="btn small danger" id="insDel">🗑️ 删掉这根电线</button></div>';
       on($('insDel'), 'click', function () { App.deleteSelection(); });
-      on($('insSay'), 'click', function () { explainType('wire'); });
+      on($('insSay'), 'click', function () { ensureVoice(); explainType('wire'); });
       return;
     }
     var part = App.byId(sel.id);
@@ -811,13 +1329,13 @@
       '<p class="inspect-desc">' + descFor(part.type) + '</p>' +
       '<p class="inspect-more">' + (guideOf(part.type) ? guideOf(part.type).tip : '') + '</p>';
     if (info2) {
-      html += '<div class="readout"><span>电流 <b>' + App.formatCurrent(info2.current) + '</b></span>' +
-        '<span>电压 <b>' + Math.abs(info2.vdrop).toFixed(2) + ' V</b></span>' +
-        '<span>功率 <b>' + (info2.power * 1000).toFixed(0) + ' mW</b></span>';
+      html += '<div class="readout"><span>电流 <b data-live="current">' + App.formatCurrent(info2.current) + '</b></span>' +
+        '<span>电压 <b data-live="voltage">' + Math.abs(info2.vdrop).toFixed(2) + ' V</b></span>' +
+        '<span>功率 <b data-live="power">' + (info2.power * 1000).toFixed(0) + ' mW</b></span>';
       if (part.type === 'motor') {
         var dcur = info2.current;
         var dirTxt = Math.abs(dcur) < 0.002 ? '停着' : (dcur > 0 ? '正转 ⟳' : '反转 ⟲');
-        html += '<span>转向 <b>' + dirTxt + '</b></span>';
+        html += '<span>转向 <b data-live="dir">' + dirTxt + '</b></span>';
       }
       html += '</div>';
     }
@@ -879,7 +1397,7 @@
       '<button class="btn small danger" id="insDel">🗑️ 删掉这个零件</button></div>';
     body.innerHTML = html;
     on($('insDel'), 'click', function () { App.deleteSelection(); });
-    on($('insSay'), 'click', function () { explainPart(part); });
+    on($('insSay'), 'click', function () { ensureVoice(); explainPart(part); });
     var rp = $('insRepair');
     if (rp) on(rp, 'click', function () { App.repairPart(part.id); });
     var sw = $('swToggle');
@@ -1055,6 +1573,15 @@
       : '这个浏览器不支持语音朗读';
     if (!supported) el.btnVoice.disabled = true;
   }
+  function updateWireStyle() {
+    if (!el.btnWireStyle) return;
+    var ortho = App.state.wireStyle === 'ortho';
+    el.btnWireStyle.classList.toggle('active', ortho);
+    el.btnWireStyle.setAttribute('aria-pressed', ortho ? 'true' : 'false');
+    el.btnWireStyle.title = ortho
+      ? '横竖走线已打开：电线横平竖直、自动避开零件；点一下换回弯弯的曲线'
+      : '把电线排成横竖走线，自动避开零件、看起来更整齐';
+  }
   function updateUndo() { el.btnUndo.disabled = !App.state.past.length; }
 
   /* ---------- 缩放 ---------- */
@@ -1184,9 +1711,10 @@
     updatePanels: updatePanels, renderTasks: renderTasks, renderInspector: renderInspector,
     updateRunButton: updateRunButton, setPowered: setPowered, setAlarm: setAlarm,
     updateSound: updateSound, updateVoice: updateVoice, updateUndo: updateUndo,
+    updateWireStyle: updateWireStyle,
     applyZoom: applyZoom, playBoom: playBoom,
     openModal: openModal, closeModal: closeModal, toast: toast,
-    speak: speak, speakProblem: speakProblem, explainType: explainType, explainPart: explainPart,
+    speak: speak, speakAuto: speakAuto, speakProblem: speakProblem, explainType: explainType, explainPart: explainPart,
     pressButton: pressButton, reverseMotorWires: reverseMotorWires,
     pathD: pathD, wireObstacles: wireObstacles,
     partEls: partEls

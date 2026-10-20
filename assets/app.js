@@ -5,6 +5,7 @@
   var STAGE_W = 1200, STAGE_H = 760;
   var STORAGE_KEY = 'xiaoxiao-dianlucheng-v1';
   var SOUND_KEY = 'xiaoxiao-dianlucheng-sound';
+  var WIRE_STYLE_KEY = 'xiaoxiao-dianlucheng-wire-style';
   /* 12 种差别明显的电线颜色：新电线优先挑没用过的，
      如果两根电线靠得近或者交叉，就挑颜色差得最远的，避免看混 */
   var WIRE_COLORS = [
@@ -19,6 +20,7 @@
     past: [], future: [], achieved: [],
     zoom: 1, fitScale: 1, scale: 1,
     sound: true, wireStart: null, shortTimer: null,
+    wireStyle: 'curve',
     burnt: {}, heat: {}, heatTimer: null, heatAt: 0,
     presetNote: '', firstRun: true
   };
@@ -256,6 +258,25 @@
     UI.renderAll();
     evaluate();
     commit();
+  }
+
+  /* 横竖走线：只改电线的画法，不改变电路连接，所以不进撤销历史 */
+  function setWireStyle(style, opts) {
+    style = style === 'ortho' ? 'ortho' : 'curve';
+    if (state.wireStyle === style) {
+      UI.updateWireStyle();
+      return style;
+    }
+    state.wireStyle = style;
+    try { localStorage.setItem(WIRE_STYLE_KEY, style); } catch (e) {}
+    UI.renderWires();
+    UI.updateWireStyle();
+    if (!(opts && opts.silent)) {
+      UI.speak(style === 'ortho'
+        ? '好呀，电线现在都走横线和竖线，会自动绕开零件，还会尽量错开，看起来更整齐。再点一下就能变回弯弯的线。'
+        : '电线变回弯弯的曲线啦。想整齐一点，就再点一下横竖线。');
+    }
+    return style;
   }
 
   /* ---------- 额定值 / 过热 ---------- */
@@ -875,6 +896,7 @@
   /* ---------- 初始化 ---------- */
   function init() {
     try { var s = localStorage.getItem(SOUND_KEY); if (s === 'off') state.sound = false; } catch (e) {}
+    try { if (localStorage.getItem(WIRE_STYLE_KEY) === 'ortho') state.wireStyle = 'ortho'; } catch (e) {}
     if (global.Voice) Voice.init();
     UI.init();
     var loaded = false;
@@ -895,13 +917,16 @@
     else { releaseButtons(); UI.renderAll(); evaluate(); }
     UI.updateSound();
     UI.updateVoice();
+    UI.updateWireStyle();
     UI.updateUndo();
     /* 首次进入，等用户点过页面后，用中文打个招呼并读一下玩法 */
     var greet = function () {
       document.removeEventListener('pointerdown', greet, true);
       document.removeEventListener('keydown', greet, true);
       setTimeout(function () {
-        UI.speak('欢迎来到小小电路城。点一个零件，我就告诉你它是做什么的。右上角可以通电试试。');
+        /* 用自动朗读：如果小朋友第一下已经点开某个零件的讲解，
+           打招呼就不要把它打断；没人说话时再念欢迎语。 */
+        UI.speakAuto('欢迎来到小小电路城。点一个零件，我就告诉你它是做什么的。右上角可以通电试试。');
       }, 260);
     };
     document.addEventListener('pointerdown', greet, true);
@@ -918,7 +943,7 @@
     deleteSelection: deleteSelection, deletePart: deletePart, clearBoard: clearBoard,
     afterChange: afterChange, evaluate: evaluate, diagnose: diagnose, termLabel: termLabel,
     startRun: startRun, stopRun: stopRun, toggleRun: toggleRun, setRunUI: setRunUI,
-    loadPreset: loadPreset, audio: audio, init: init,
+    loadPreset: loadPreset, audio: audio, init: init, setWireStyle: setWireStyle,
     duplicateProps: duplicateProps,
     repairPart: repairPart, stressOf: stressOf, worstStress: worstStress,
     burnVerb: burnVerb, releaseButtons: releaseButtons,

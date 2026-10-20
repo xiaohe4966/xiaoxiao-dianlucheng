@@ -6,7 +6,7 @@
 <title>小小电路城 · 儿童电路模拟实验室</title>
 <meta name="description" content="给小朋友的电路模拟器：拖放电池、按钮、开关、电阻、可变电阻、电位器、LED、灯泡、喇叭、二极管、保险丝、电机、电流表、电压表和面包板，连线后通电，看电流流动，电机能正反转，短路会爆炸，保险丝会熔断保护电路。">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23ffd166'/%3E%3Cpath d='M36 8 16 38h13l-4 20 22-32H34z' fill='%2322314a'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="assets/style.css?v=8.15">
+<link rel="stylesheet" href="assets/style.css?v=8.26">
 </head>
 <body>
 <div class="app">
@@ -26,6 +26,7 @@
       <button class="btn ghost" id="btnUndo" type="button" title="撤销 (Ctrl+Z)"><span aria-hidden="true">↩️</span><span class="hide-sm">撤销</span></button>
       <button class="btn ghost" id="btnClear" type="button" title="清空工作台"><span aria-hidden="true">🧹</span><span class="hide-sm">清空</span></button>
       <button class="btn ghost" id="btnHelp" type="button" title="怎么玩"><span aria-hidden="true">❓</span><span class="hide-sm">玩法</span></button>
+      <button class="btn ghost wire-style-btn" id="btnWireStyle" type="button" aria-pressed="false" title="把电线排成横竖走线，自动避开零件、看起来更整齐"><span aria-hidden="true">📐</span><span class="hide-sm">横竖线</span></button>
       <button class="btn ghost" id="btnSound" type="button" aria-pressed="true" title="音效开关"><span aria-hidden="true">🔊</span><span class="hide-sm">声音</span></button>
       <button class="btn ghost voice-btn" id="btnVoice" type="button" aria-pressed="true" title="中文朗读开关" data-nospeak><span aria-hidden="true">🔈</span><span class="hide-sm" id="voiceText">朗读</span></button>
       <button class="btn run" id="btnRun" type="button"><span class="run-ico" aria-hidden="true">▶</span><span id="runText">通电试试</span></button>
@@ -114,11 +115,11 @@
 </div>
 <div class="toast-root" id="toastRoot" aria-live="polite"></div>
 
-<script src="assets/voice.js?v=8.15"></script>
-<script src="assets/sim.js?v=8.15"></script>
-<script src="assets/parts.js?v=8.15"></script>
-<script src="assets/ui.js?v=8.15"></script>
-<script src="assets/interact.js?v=8.15"></script>
-<script src="assets/app.js?v=8.15"></script>
+<script src="assets/voice.js?v=8.26"></script>
+<script src="assets/sim.js?v=8.26"></script>
+<script src="assets/parts.js?v=8.26"></script>
+<script src="assets/ui.js?v=8.26"></script>
+<script src="assets/interact.js?v=8.26"></script>
+<script src="assets/app.js?v=8.26"></script>
 </body>
 </html>
