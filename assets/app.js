@@ -4,8 +4,13 @@
 
   var STAGE_W = 1200, STAGE_H = 760;
   var STORAGE_KEY = 'xiaoxiao-dianlucheng-v1';
+  var STORAGE_VERSION = 2;
+  var BACKUP_KEY = 'xiaoxiao-dianlucheng-backup';
+  var LOG_KEY = 'xiaoxiao-dianlucheng-log';
   var SOUND_KEY = 'xiaoxiao-dianlucheng-sound';
   var WIRE_STYLE_KEY = 'xiaoxiao-dianlucheng-wire-style';
+  var WIRE_LABELS_KEY = 'xiaoxiao-dianlucheng-wire-labels';
+  var MAX_PARTS = 80, MAX_WIRES = 240;
   /* 12 种差别明显的电线颜色：新电线优先挑没用过的，
      如果两根电线靠得近或者交叉，就挑颜色差得最远的，避免看混 */
   var WIRE_COLORS = [
@@ -20,9 +25,11 @@
     past: [], future: [], achieved: [],
     zoom: 1, fitScale: 1, scale: 1,
     sound: true, wireStart: null, shortTimer: null,
-    wireStyle: 'curve',
+    wireStyle: 'curve', wireLabels: false,
     burnt: {}, heat: {}, heatTimer: null, heatAt: 0,
-    presetNote: '', firstRun: true
+    presetNote: '', firstRun: true,
+    log: [], guide: { active: false, step: 0 }, hospital: null,
+    shareLoaded: false
   };
 
   /* ---------- 小工具 ---------- */
@@ -145,16 +152,117 @@
 
   /* ---------- 历史记录 / 本地保存 ---------- */
   function snapshot() {
-    return JSON.stringify({ parts: state.parts, wires: state.wires, nextId: state.nextId, achieved: state.achieved, burnt: state.burnt });
+    return JSON.stringify({
+      v: STORAGE_VERSION,
+      parts: state.parts, wires: state.wires, nextId: state.nextId,
+      achieved: state.achieved, burnt: state.burnt
+    });
+  }
+  /* 本地存档和分享链接都可能来自旧版本或者被改坏。
+     读进来之前先逐项检查：类型、接线柱、重复编号、越界坐标全部收拾干净，
+     坏掉的东西直接丢掉，绝不让一份脏数据把整个页面卡住。 */
+  function sanitizeSnapshot(d) {
+    if (!d || typeof d !== 'object' || Array.isArray(d)) return null;
+    var parts = [], byId = {}, used = {};
+    var rawParts = Array.isArray(d.parts) ? d.parts.slice(0, MAX_PARTS) : [];
+    rawParts.forEach(function (raw, i) {
+      if (!raw || typeof raw !== 'object') return;
+      var def = PARTS[raw.type];
+      if (!def) return;
+      var id = typeof raw.id === 'string' && raw.id ? raw.id.slice(0, 40) : 'p' + (i + 1);
+      while (used[id]) id = id + 'x';
+      used[id] = 1;
+      var x = Number(raw.x), y = Number(raw.y);
+      var props = sanitizeProps(raw.type, raw.props);
+      var part = {
+        id: id, type: raw.type,
+        x: isFinite(x) ? clamp(Math.round(x), 0, STAGE_W - def.w) : 60,
+        y: isFinite(y) ? clamp(Math.round(y), 0, STAGE_H - def.h) : 60,
+        props: props
+      };
+      parts.push(part);
+      byId[part.id] = part;
+    });
+    var wires = [], wireSeen = {};
+    var rawWires = Array.isArray(d.wires) ? d.wires.slice(0, MAX_WIRES) : [];
+    rawWires.forEach(function (raw, i) {
+      if (!raw || typeof raw !== 'object' || !raw.a || !raw.b) return;
+      var pa = byId[raw.a.part], pb = byId[raw.b.part];
+      if (!pa || !pb) return;
+      var da = PARTS[pa.type], db = PARTS[pb.type];
+      var ta = da.terms.some(function (t) { return t.id === raw.a.term; });
+      var tb = db.terms.some(function (t) { return t.id === raw.b.term; });
+      if (!ta || !tb) return;
+      if (raw.a.part === raw.b.part && raw.a.term === raw.b.term) return;
+      var key = [raw.a.part, raw.a.term, raw.b.part, raw.b.term].sort().join('|');
+      if (wireSeen[key]) return;
+      wireSeen[key] = 1;
+      var id = typeof raw.id === 'string' && raw.id ? raw.id.slice(0, 40) : 'w' + (i + 1);
+      while (used[id]) id = id + 'x';
+      used[id] = 1;
+      var wire = {
+        id: id,
+        a: { part: raw.a.part, term: raw.a.term },
+        b: { part: raw.b.part, term: raw.b.term }
+      };
+      if (typeof raw.color === 'string' && /^#[0-9a-f]{3,8}$/i.test(raw.color)) wire.color = raw.color;
+      wires.push(wire);
+    });
+    var max = 0;
+    parts.concat(wires).forEach(function (o) {
+      var m = /(\d+)$/.exec(o.id || '');
+      if (m) max = Math.max(max, parseInt(m[1], 10));
+    });
+    var nextId = Math.max(Number(d.nextId) || 1, max + 1);
+    var achieved = (Array.isArray(d.achieved) ? d.achieved : [])
+      .filter(function (id) { return typeof id === 'string'; })
+      .slice(0, 60);
+    var burnt = {};
+    if (d.burnt && typeof d.burnt === 'object' && !Array.isArray(d.burnt)) {
+      Object.keys(d.burnt).forEach(function (id) {
+        if (byId[id] && d.burnt[id] && typeof d.burnt[id] === 'object') burnt[id] = d.burnt[id];
+      });
+    }
+    return { parts: parts, wires: wires, nextId: nextId, achieved: achieved, burnt: burnt };
+  }
+  function sanitizeProps(type, raw) {
+    var props = Object.assign({}, DEFAULT_PROPS[type] || {});
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      Object.keys(raw).forEach(function (k) {
+        if (typeof raw[k] === 'string' && raw[k].length > 80) return;
+        props[k] = raw[k];
+      });
+    }
+    if (type === 'battery') {
+      var v = Number(props.voltage);
+      props.voltage = isFinite(v) ? clamp(v, 0.5, 24) : 3;
+    } else if (type === 'resistor') {
+      var r = Number(props.resistance);
+      props.resistance = isFinite(r) ? clamp(Math.round(r), 1, 1000000) : 100;
+    } else if (type === 'pot') {
+      var pv = Number(props.resistance);
+      props.resistance = isFinite(pv) ? clamp(Math.round(pv), 0, 1000) : 500;
+    } else if (type === 'ldr') {
+      var light = Number(props.light);
+      props.light = isFinite(light) ? clamp(Math.round(light), 0, 100) : 50;
+    } else if (type === 'led') {
+      if (!/^#[0-9a-f]{6}$/i.test(String(props.color || ''))) props.color = '#ff5d5d';
+    }
+    if ('closed' in props) props.closed = !!props.closed;
+    if ('pressed' in props) props.pressed = false;
+    return props;
   }
   function restore(json) {
-    var d = JSON.parse(json);
-    state.parts = d.parts || []; state.wires = d.wires || [];
-    state.nextId = d.nextId || 1; state.achieved = d.achieved || [];
-    state.burnt = d.burnt || {};
+    var d = null;
+    try { d = sanitizeSnapshot(typeof json === 'string' ? JSON.parse(json) : json); } catch (e) { d = null; }
+    if (!d) return false;
+    state.parts = d.parts; state.wires = d.wires;
+    state.nextId = d.nextId; state.achieved = d.achieved;
+    state.burnt = d.burnt;
     state.heat = {};
     state.selection = null;
     releaseButtons();
+    return true;
   }
   /* 按钮是「按住才通」的，松开手 / 刷新页面都要回到断开状态 */
   function releaseButtons() {
@@ -171,14 +279,155 @@
   function undo() {
     if (!state.past.length) { UI.toast('没有可以撤销的啦'); return; }
     state.future.push(snapshot());
-    restore(state.past.pop());
+    if (state.future.length > 60) state.future.shift();
+    if (!restore(state.past.pop())) { state.past = []; UI.toast('这一步恢复不了啦'); return; }
     if (state.running) stopRun();
     UI.renderAll(); evaluate(); commit(); UI.toast('撤销啦 ↩️');
     UI.speak('撤销啦。');
+    UI.fitToContent();
+  }
+  function redo() {
+    if (!state.future.length) { UI.toast('没有可以重做的啦'); return; }
+    state.past.push(snapshot());
+    if (state.past.length > 60) state.past.shift();
+    if (!restore(state.future.pop())) { state.future = []; UI.toast('这一步恢复不了啦'); return; }
+    if (state.running) stopRun();
+    UI.renderAll(); evaluate(); commit(); UI.toast('重做啦 ↪️');
+    UI.speak('重做啦。');
+    UI.fitToContent();
   }
   function commit() {
     try { localStorage.setItem(STORAGE_KEY, snapshot()); } catch (e) {}
     UI.updateUndo();
+  }
+  function backupCurrent() {
+    try { localStorage.setItem(BACKUP_KEY, snapshot()); } catch (e) {}
+  }
+  function hasBackup() {
+    try { return !!localStorage.getItem(BACKUP_KEY); } catch (e) { return false; }
+  }
+  function restoreBackup() {
+    try {
+      var raw = localStorage.getItem(BACKUP_KEY);
+      if (!raw || !restore(raw)) { UI.toast('还没有可以恢复的备份'); return; }
+      if (state.running) stopRun();
+      UI.renderAll(); evaluate(); commit(); UI.fitToContent();
+      UI.toast('恢复上一次清空前的电路啦', 'good');
+      UI.speak('恢复上一次清空前的电路啦。');
+    } catch (e) {
+      UI.toast('备份读不出来啦');
+    }
+  }
+
+  /* ---------- 分享链接 ---------- */
+  function encodeShare() {
+    var payload = JSON.stringify({
+      v: STORAGE_VERSION, parts: state.parts, wires: state.wires, nextId: state.nextId
+    });
+    return btoa(unescape(encodeURIComponent(payload)))
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  function decodeShare(code) {
+    try {
+      var s = String(code || '').replace(/-/g, '+').replace(/_/g, '/');
+      while (s.length % 4) s += '=';
+      var json = decodeURIComponent(escape(atob(s)));
+      return JSON.parse(json);
+    } catch (e) {
+      return null;
+    }
+  }
+  function shareCircuit() {
+    if (!state.parts.length) {
+      UI.toast('先搭一个电路，再分享给朋友吧');
+      return;
+    }
+    var url = location.origin + location.pathname + location.search + '#c=' + encodeShare();
+    var done = function () {
+      UI.toast('分享链接复制好啦，发给朋友试试', 'good');
+      UI.speak('分享链接复制好啦。朋友打开就能看到你的电路。');
+    };
+    if (global.navigator && navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(done, function () { promptShare(url); });
+    } else {
+      promptShare(url);
+    }
+  }
+  function promptShare(url) {
+    try {
+      if (global.prompt('复制这个链接发给朋友：', url)) UI.toast('分享链接准备好啦', 'good');
+    } catch (e) {}
+  }
+  function loadSharedHash() {
+    var m = /(?:^|[#&])c=([^&]+)/.exec(location.hash || '');
+    if (!m) return false;
+    var data = decodeShare(m[1]);
+    if (!data) return false;
+    var d = sanitizeSnapshot(data);
+    if (!d || !d.parts.length) return false;
+    try {
+      var old = localStorage.getItem(STORAGE_KEY);
+      if (old) localStorage.setItem(BACKUP_KEY, old);
+    } catch (e) {}
+    state.parts = d.parts; state.wires = d.wires; state.nextId = d.nextId;
+    state.achieved = []; state.burnt = {}; state.heat = {};
+    state.presetNote = '这是朋友分享的电路，可以随便改。';
+    state.shareLoaded = true;
+    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+    return true;
+  }
+
+  /* ---------- 实验记录 ---------- */
+  function loadLog() {
+    try {
+      var d = JSON.parse(localStorage.getItem(LOG_KEY) || '[]');
+      if (Array.isArray(d)) state.log = d.filter(function (x) { return x && isFinite(x.current); }).slice(0, 24);
+    } catch (e) { state.log = []; }
+  }
+  function saveLog() {
+    try { localStorage.setItem(LOG_KEY, JSON.stringify(state.log)); } catch (e) {}
+  }
+  function recordMeasurement() {
+    var sim = state.sim;
+    if (!state.parts.length) { UI.toast('先搭一个电路再记录吧'); return; }
+    if (!sim) return;
+    if (!state.running || sim.totalCurrent <= 0.0000005) {
+      UI.toast('先通电，让电流跑起来，再记下读数');
+      UI.speak('先通电，等电流跑起来，再记下读数。');
+      return;
+    }
+    var battery = sim.batteries.length ? Math.abs(sim.batteries[0].current) : 0;
+    var battV = 0;
+    state.parts.forEach(function (p) {
+      if (p.type !== 'battery') return;
+      var b = sim.batteries.find(function (q) { return q.partId === p.id; });
+      if (b) battV = Math.max(battV, b.voltage);
+    });
+    var active = state.parts.filter(function (p) {
+      var info = sim.parts[p.id];
+      return info && Math.abs(info.current) > 0.001;
+    }).length;
+    state.log.unshift({
+      at: Date.now(),
+      current: sim.totalCurrent,
+      battery: battery,
+      voltage: battV,
+      active: active,
+      parts: state.parts.length,
+      wires: state.wires.length
+    });
+    state.log = state.log.slice(0, 24);
+    saveLog();
+    UI.renderLog();
+    UI.toast('📝 记下读数：' + formatCurrent(sim.totalCurrent), 'good');
+    UI.speak('记下读数。现在总电流是' + formatCurrent(sim.totalCurrent) + '。');
+  }
+  function clearLog() {
+    if (!state.log.length) return;
+    state.log = [];
+    saveLog();
+    UI.renderLog();
+    UI.toast('实验记录清空啦');
   }
 
   /* ---------- 零件 / 电线操作 ---------- */
@@ -242,13 +491,26 @@
     state.selection = { kind: 'part', id: id };
     deleteSelection();
   }
-  function clearBoard() {
+  function clearBoard(force) {
     if (!state.parts.length && !state.wires.length) return;
+    if (!force) {
+      var doClear = function () { clearBoard(true); };
+      if (UI.confirm) {
+        UI.confirm('清空工作台？', '工作台会变干净。清空以后，按「撤销」或者到「玩法」里找备份，都能找回来。', doClear);
+      } else if (global.confirm('清空工作台？清空后可以撤销。')) {
+        doClear();
+      }
+      return;
+    }
+    backupCurrent();
     pushHistory();
     if (state.running) stopRun();
     state.parts = []; state.wires = []; state.selection = null;
-    state.achieved = []; state.burnt = {}; state.heat = {};
+    state.burnt = {}; state.heat = {};
+    state.guide = { active: false, step: 0 };
+    state.hospital = null;
     afterChange();
+    UI.renderGuide();
     UI.toast('清空啦，按「撤销」可以找回来');
     UI.speak('工作台清空啦。按撤销可以找回来。');
   }
@@ -277,6 +539,19 @@
         : '电线变回弯弯的曲线啦。想整齐一点，就再点一下横竖线。');
     }
     return style;
+  }
+
+  function setWireLabels(on) {
+    state.wireLabels = !!on;
+    try { localStorage.setItem(WIRE_LABELS_KEY, state.wireLabels ? 'on' : 'off'); } catch (e) {}
+    UI.updateWireLabels();
+    UI.renderWires();
+    if (state.wireLabels) {
+      UI.toast('电线电流标签打开啦，通电后能看到每根线里的电流', 'good');
+      UI.speak('电线电流标签打开啦。通电以后，每根电线上会显示流过它的电流。');
+    } else {
+      UI.speak('电线电流标签关掉啦。');
+    }
   }
 
   /* ---------- 额定值 / 过热 ---------- */
@@ -482,13 +757,20 @@
       };
     }
     if (sim && sim.short) {
-      var w = null;
-      if (sim.maxWire) {
-        var wid = sim.maxWire.id;
-        w = state.wires.find(function (q) { return q.id === wid; });
-      }
+      var info = sim.shortInfo || {};
+      var pathWireIds = (info.wireIds || []).slice();
+      var pathPartIds = (info.partIds || []).slice();
+      var wid = pathWireIds[0] || (sim.maxWire && sim.maxWire.id);
+      var w = wid ? state.wires.find(function (q) { return q.id === wid; }) : null;
       var bat = state.parts.find(function (p) { return p.type === 'battery'; });
-      /* 找出近路上是谁：二极管和开关都不是用电器，没有它们才怪电线 */
+      var inPath = function (type) {
+        for (var k = 0; k < pathPartIds.length; k++) {
+          var pp = byId(pathPartIds[k]);
+          if (pp && pp.type === type) return pp;
+        }
+        return null;
+      };
+      /* 二极管不是导线，属于「电流只走非用电器」的另一类短路 */
       var carries = function (type) {
         for (var k = 0; k < state.parts.length; k++) {
           var cp = state.parts[k];
@@ -498,11 +780,16 @@
         }
         return null;
       };
-      var diodeInLoop = carries('diode');
-      var switchInLoop = carries('switch');
-      var fuseInLoop = carries('fuse');
-      var culprit = diodeInLoop || switchInLoop || fuseInLoop;
-      var out = { code: 'short', wireId: w ? w.id : null, partId: culprit ? culprit.id : (bat ? bat.id : null) };
+      var diodeInLoop = info.kind === 'noload' ? carries('diode') : null;
+      var fuseInLoop = inPath('fuse');
+      var switchInLoop = inPath('switch');
+      var ammeterInLoop = inPath('ammeter');
+      var boardInLoop = inPath('breadboard');
+      var culprit = fuseInLoop || diodeInLoop || switchInLoop || ammeterInLoop || boardInLoop;
+      var out = {
+        code: 'short', wireId: w ? w.id : null, wireIds: pathWireIds, partIds: pathPartIds,
+        partId: culprit ? culprit.id : (bat ? bat.id : null)
+      };
       if (fuseInLoop) {
         out.message = '短路啦！不过中间有保险丝——通电时它会先「啪」地熔断，替电池挡住大电流。这是它的工作，但也不要故意短路哦。';
         return out;
@@ -511,11 +798,21 @@
         out.message = '短路啦！二极管不是用电器，它只是一扇单向门。把它直接接在电池两头，电流就抄近路跑回去了，二极管会发烫烧坏。要在它旁边加一个灯泡、电阻、LED 或者电机。';
         return out;
       }
+      if (ammeterInLoop) {
+        out.message = '短路啦！电流表的内阻非常小，直接接在电池两头就等于一根电线，电流会大得吓人。电流表要「串」在电路里，不能并到电池两头。';
+        return out;
+      }
       if (switchInLoop) {
         out.message = '短路啦！开关把电池两头直接连起来啦，中间没有用电器。要加一个灯泡、电阻、LED 或者电机才行。';
         return out;
       }
-      out.message = '短路啦！有一根电线直接把电池的正极和负极连起来了。快把中间的电线拿掉，或者在中间加一个灯泡、电阻、电机、喇叭。';
+      if (boardInLoop) {
+        out.message = '短路啦！面包板的红色 + 轨和蓝色 − 轨被连在一起了。检查一下，是不是有电线同时接到了两条电源轨上？';
+        return out;
+      }
+      out.message = pathWireIds.length > 1
+        ? '短路啦！几根电线接起来，把电池的正极和负极直接连上了。快把中间的电线拿掉，或者在中间加一个灯泡、电阻、电机、喇叭。'
+        : '短路啦！有一根电线直接把电池的正极和负极连起来了。快把中间的电线拿掉，或者在中间加一个灯泡、电阻、电机、喇叭。';
       return out;
     }
     /* 0.5µA 以上就算「电路通了」：1MΩ 电阻配 3V 电池只有约 1.2µA，
@@ -602,8 +899,10 @@
         UI.setAlarm(false);
         audio.update(sim);
         checkTasks(sim);
+        checkHospital(sim);
       }
     }
+    checkGuide(sim);
     UI.refreshFromSim();
     UI.updatePanels();
   }
@@ -654,6 +953,32 @@
       }
     },
     {
+      id: 'twoLamps', icon: '💡', label: '点亮两个灯泡',
+      hint: '放两个灯泡，串联或者并联都行，让它们同时亮起来。',
+      when: function (sim) {
+        if (sim.short) return false;
+        var n = 0;
+        state.parts.forEach(function (p) {
+          var info = sim.parts[p.id];
+          if (p.type === 'lamp' && info && Math.abs(info.current) > 0.0018) n++;
+        });
+        return n >= 2;
+      }
+    },
+    {
+      id: 'parallel', icon: '🧲', label: '让并联灯泡更亮',
+      hint: '把两个灯泡并联，每个灯泡都拿到完整电压，电流会比串联时更大。',
+      when: function (sim) {
+        if (sim.short) return false;
+        var bright = 0;
+        state.parts.forEach(function (p) {
+          var info = sim.parts[p.id];
+          if (p.type === 'lamp' && info && info.current > 0.03) bright++;
+        });
+        return bright >= 2;
+      }
+    },
+    {
       id: 'measure', icon: '🧪', label: '电流电压一起测',
       hint: '电流表串进电路，电压表并在一个零件两边，同时读出电流和电压，像工程师一样检测电路。',
       when: function (sim) {
@@ -670,6 +995,223 @@
       }
     }
   ];
+  /* ---------- 小电带你搭 ---------- */
+  var GUIDE_STEPS = [
+    {
+      title: '放一节电池', icon: '🔋',
+      tip: '从零件箱点一下电池，它会跳到工作台中间。电池是电流的发动机。',
+      test: function () { return state.parts.some(function (p) { return p.type === 'battery'; }); }
+    },
+    {
+      title: '放一个电阻', icon: '🧱',
+      tip: '电阻是电流的减速带。点零件箱里的「电阻」，把它放在电池旁边。',
+      test: function () { return state.parts.some(function (p) { return p.type === 'resistor'; }); }
+    },
+    {
+      title: '放一个 LED', icon: '💡',
+      tip: 'LED 会发光。长脚是正极，短脚是负极，等一会儿连线时别接反。',
+      test: function () { return state.parts.some(function (p) { return p.type === 'led'; }); }
+    },
+    {
+      title: '连成一个圈', icon: '🪢',
+      tip: '点电池 +、开关、电阻、LED 上的小圆点，把电池正极 → 电阻 → LED → 电池负极连成一圈。',
+      test: function (sim) {
+        return !!(sim && !sim.short && sim.totalCurrent > 0.0000005);
+      }
+    },
+    {
+      title: '通电，让 LED 亮', icon: '⚡',
+      tip: '按右上角「通电试试」。看到电流小点在跑、LED 亮起来，就成功啦！',
+      test: function (sim) {
+        return !!(state.running && sim && !sim.short && state.parts.some(function (p) {
+          var info = sim.parts[p.id];
+          return p.type === 'led' && info && Math.abs(info.current) > 0.0018;
+        }));
+      }
+    }
+  ];
+  function guideStep() {
+    if (!state.guide.active) return null;
+    return GUIDE_STEPS[state.guide.step] || null;
+  }
+  function checkGuide(sim) {
+    if (!state.guide.active) return;
+    sim = sim || state.sim;
+    var moved = false, guard = 0;
+    while (state.guide.active && guard++ < GUIDE_STEPS.length + 1) {
+      var step = GUIDE_STEPS[state.guide.step];
+      if (!step) break;
+      if (!step.test(sim)) break;
+      state.guide.step++;
+      moved = true;
+      if (state.guide.step >= GUIDE_STEPS.length) {
+        state.guide.active = false;
+        audio.chime();
+        UI.toast('🎉 你跟着小电搭好啦！', 'good');
+        UI.speak('太棒啦！你跟着小电，把电池、电阻和 LED 连成了一个圈，还点亮了 LED。你已经是小小电路工程师啦！');
+        break;
+      }
+      var next = GUIDE_STEPS[state.guide.step];
+      UI.toast(next.icon + ' 下一步：' + next.title, 'good', { silent: true });
+      UI.speak('下一步，' + next.title + '。' + next.tip);
+    }
+    if (moved) UI.renderGuide();
+  }
+  function startGuide(force) {
+    if (state.guide.active) { UI.toast('已经在带你搭啦，看右边的提示'); return; }
+    if (!force && state.parts.length) {
+      var go = function () { startGuide(true); };
+      if (UI.confirm) {
+        UI.confirm('从空白开始搭？', '现在的电路会先留一份备份，也能按「撤销」找回来。', go);
+      } else if (global.confirm('从空白开始搭？现在的电路可以撤销找回。')) {
+        go();
+      }
+      return;
+    }
+    if (force) {
+      backupCurrent();
+      pushHistory();
+      if (state.running) stopRun();
+      state.parts = []; state.wires = []; state.nextId = 1;
+      state.selection = null; state.burnt = {}; state.heat = {};
+      state.diodeState = {}; state.hospital = null;
+      state.guide = { active: false, step: 0 };
+      UI.renderAll();
+      evaluate();
+      commit();
+      UI.fitToContent();
+    }
+    state.guide = { active: true, step: 0 };
+    state.hospital = null;
+    UI.renderGuide();
+    var step = GUIDE_STEPS[0];
+    UI.toast('🧭 小电带你搭：' + step.title, 'good', { silent: true });
+    UI.speak('好呀，我来带你搭一个会亮的 LED 电路。第一步，' + step.title + '。' + step.tip);
+    checkGuide(state.sim);
+  }
+  function skipGuideStep() {
+    if (!state.guide.active) return;
+    state.guide.step++;
+    if (state.guide.step >= GUIDE_STEPS.length) {
+      state.guide.active = false;
+      UI.renderGuide();
+      UI.toast('引导结束啦，接下来可以自己随便玩');
+      UI.speak('引导结束啦。接下来你可以自己随便玩。');
+      return;
+    }
+    var next = GUIDE_STEPS[state.guide.step];
+    UI.renderGuide();
+    UI.toast('跳到：' + next.title);
+    UI.speak('好，那先看这一步：' + next.title + '。' + next.tip);
+    checkGuide(state.sim);
+  }
+  function stopGuide() {
+    state.guide.active = false;
+    UI.renderGuide();
+    UI.toast('引导关掉啦，想再听就点「开始」');
+  }
+
+  /* ---------- 电路医院 ---------- */
+  var HOSPITAL = {
+    ledReverse: {
+      name: 'LED 怎么不亮？', icon: '💡',
+      desc: '电池、开关、电阻、LED 都接好了，可是 LED 一点光都没有。',
+      goal: '找出问题，让 LED 亮起来。',
+      build: function () {
+        var bat = makePart('battery', 70, 300), sw = makePart('switch', 300, 301),
+            r = makePart('resistor', 520, 310), led = makePart('led', 760, 285);
+        return [pwire(bat, 'pos', sw, 'a'), pwire(sw, 'b', r, 'a'),
+                pwire(r, 'b', led, 'ca'), pwire(led, 'an', bat, 'neg')];
+      },
+      check: function (sim) {
+        return state.parts.some(function (p) {
+          var info = sim.parts[p.id];
+          return p.type === 'led' && info && info.current > 0.0018 && !sim.short;
+        });
+      },
+      hint: '点中 LED，看看它的长脚（+）是不是接到了电池正极那一边。接反了就不会亮。'
+    },
+    missingWire: {
+      name: '还差一根电线', icon: '🪢',
+      desc: '零件都摆好了，电线也接了大半，但电路还没有连成一个圈。',
+      goal: '把缺的那根电线接上，让 LED 亮起来。',
+      build: function () {
+        var bat = makePart('battery', 70, 300), sw = makePart('switch', 300, 301),
+            r = makePart('resistor', 520, 310), led = makePart('led', 760, 285);
+        return [pwire(bat, 'pos', sw, 'a'), pwire(sw, 'b', r, 'a'), pwire(r, 'b', led, 'an')];
+      },
+      check: function (sim) {
+        return state.parts.some(function (p) {
+          var info = sim.parts[p.id];
+          return p.type === 'led' && info && info.current > 0.0018 && !sim.short;
+        });
+      },
+      hint: '看看每个小圆点是不是都接了电线。LED 的短脚那边好像还空着。'
+    },
+    shorted: {
+      name: '危险的短路', icon: '💥',
+      desc: '有人用一根电线把电池的正极和负极直接连起来了，通电就会爆炸。',
+      goal: '拆掉短路，接一个用电器，让电流乖乖工作。',
+      build: function () {
+        var bat = makePart('battery', 300, 300);
+        return [pwire(bat, 'pos', bat, 'neg')];
+      },
+      check: function (sim) {
+        return !!(state.running && sim && !sim.short && sim.totalCurrent > 0.0005);
+      },
+      hint: '先删掉电池两头那根危险的电线，再放一个灯泡、电阻、LED 或电机，重新连成一个圈。'
+    },
+    hotLamp: {
+      name: '灯泡烫得厉害', icon: '🔆',
+      desc: '9V 电池直接接在小灯泡上，灯泡亮是亮，可是电流超过了它的额定值。',
+      goal: '让灯泡安全地亮起来，不要过载。',
+      build: function () {
+        var bat = makePart('battery', 100, 300, { voltage: 9 }), lamp = makePart('lamp', 560, 282);
+        return [pwire(bat, 'pos', lamp, 'a'), pwire(lamp, 'b', bat, 'neg')];
+      },
+      check: function (sim) {
+        if (!state.running || !sim || sim.short) return false;
+        var lamp = state.parts.find(function (p) { return p.type === 'lamp'; });
+        var info = lamp && sim.parts[lamp.id];
+        if (!info || info.current <= 0.001) return false;
+        return !(worstStress() && worstStress().st.ratio > 1);
+      },
+      hint: '小灯泡额定大约 80mA。把电池换成 3V，它就能安全地亮；也可以在电路里串一个合适的电阻。'
+    }
+  };
+  function loadCase(id) {
+    var c = HOSPITAL[id];
+    if (!c) return;
+    if (state.running) stopRun();
+    pushHistory();
+    state.parts = []; state.wires = []; state.nextId = 1;
+    state.selection = null; state.burnt = {}; state.heat = {}; state.diodeState = {};
+    state.wires = c.build();
+    normalizeIds();
+    state.hospital = id;
+    state.guide = { active: false, step: 0 };
+    state.presetNote = '电路医院：' + c.goal;
+    UI.renderAll();
+    evaluate();
+    commit();
+    UI.renderGuide();
+    UI.fitToContent();
+    UI.toast('🏥 电路医院：' + c.name, 'good', { silent: true });
+    UI.speak('电路医院。' + c.desc + ' 你的任务是：' + c.goal);
+  }
+  function checkHospital(sim) {
+    if (!state.hospital || !state.running) return;
+    var c = HOSPITAL[state.hospital];
+    if (!c || !c.check || !c.check(sim)) return;
+    var name = c.name;
+    state.hospital = null;
+    state.presetNote = '电路医院的任务完成啦！';
+    audio.chime();
+    UI.toast('🏥 修好啦！' + name + ' 🎉', 'good');
+    UI.speak('修好啦！你解决了「' + name + '」。真像一位小小电路医生！');
+    UI.renderGuide();
+  }
+
   function checkTasks(sim) {
     var won = [];
     TASKS.forEach(function (t) {
@@ -862,6 +1404,26 @@
                 pwire(v, 'a', led, 'an'), pwire(v, 'b', led, 'ca')];
       }
     },
+    series: {
+      name: '串联两个灯泡', icon: '🔗', desc: '两个灯泡手拉手串在一条路上，电流只有一条路可走。',
+      note: '串联时电流处处一样大。两个灯泡一起分担电压，所以每个都暗一些；拿掉一个，整条路就断了。',
+      build: function () {
+        var bat = makePart('battery', 60, 300), sw = makePart('switch', 280, 301),
+            l1 = makePart('lamp', 470, 282), l2 = makePart('lamp', 700, 282);
+        return [pwire(bat, 'pos', sw, 'a'), pwire(sw, 'b', l1, 'a'),
+                pwire(l1, 'b', l2, 'a'), pwire(l2, 'b', bat, 'neg')];
+      }
+    },
+    parallel: {
+      name: '并联两个灯泡', icon: '🧲', desc: '两个灯泡各走一条路，再一起回到电池。',
+      note: '并联时每个灯泡都拿到完整的电压，所以更亮；拿掉一个，另一个还会亮。家里的电灯大多是并联的。',
+      build: function () {
+        var bat = makePart('battery', 60, 300), sw = makePart('switch', 280, 301),
+            l1 = makePart('lamp', 500, 220), l2 = makePart('lamp', 500, 430);
+        return [pwire(bat, 'pos', sw, 'a'), pwire(sw, 'b', l1, 'a'), pwire(sw, 'b', l2, 'a'),
+                pwire(l1, 'b', bat, 'neg'), pwire(l2, 'b', bat, 'neg')];
+      }
+    },
     short: {
       name: '短路危险实验', icon: '💥', danger: true,
       desc: '只用一根电线把电池两头连起来，通电会爆炸！',
@@ -878,8 +1440,9 @@
     if (state.running) stopRun();
     pushHistory();
     state.parts = []; state.wires = []; state.nextId = 1;
-    state.selection = null; state.achieved = []; state.diodeState = {};
+    state.selection = null; state.diodeState = {};
     state.burnt = {}; state.heat = {};
+    state.hospital = null;
     state.wires = preset.build();
     normalizeIds();
     state.presetNote = preset.note;
@@ -887,6 +1450,8 @@
     evaluate();
     commit();
     UI.renderTasks();
+    UI.renderGuide();
+    UI.fitToContent();
     if (!silent) {
       UI.toast('已加载示例：' + preset.name + '（撤销可恢复）', 'good');
       UI.speak('加载示例：' + preset.name + '。' + preset.desc + ' ' + preset.note);
@@ -897,28 +1462,50 @@
   function init() {
     try { var s = localStorage.getItem(SOUND_KEY); if (s === 'off') state.sound = false; } catch (e) {}
     try { if (localStorage.getItem(WIRE_STYLE_KEY) === 'ortho') state.wireStyle = 'ortho'; } catch (e) {}
+    try { if (localStorage.getItem(WIRE_LABELS_KEY) === 'on') state.wireLabels = true; } catch (e) {}
+    loadLog();
     if (global.Voice) Voice.init();
     UI.init();
     var loaded = false;
     try {
-      var saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        var d = JSON.parse(saved);
-        if (d && d.parts && d.parts.length) {
-          state.parts = d.parts; state.wires = d.wires || [];
-          state.nextId = d.nextId || 1; state.achieved = d.achieved || [];
-          state.burnt = d.burnt || {};
-          normalizeIds();
-          loaded = true;
-        }
+      if (loadSharedHash()) {
+        loaded = true;
+        state.achieved = [];
+        commit();
       }
     } catch (e) {}
+    try {
+      if (!loaded) {
+        var saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+          var d = sanitizeSnapshot(JSON.parse(saved));
+          if (d && d.parts.length) {
+            state.parts = d.parts; state.wires = d.wires;
+            state.nextId = d.nextId; state.achieved = d.achieved;
+            state.burnt = d.burnt;
+            loaded = true;
+          }
+        }
+      }
+    } catch (e) {
+      try { localStorage.setItem(BACKUP_KEY, localStorage.getItem(STORAGE_KEY) || ''); } catch (e2) {}
+    }
     if (!loaded) loadPreset('led', true);
     else { releaseButtons(); UI.renderAll(); evaluate(); }
     UI.updateSound();
     UI.updateVoice();
     UI.updateWireStyle();
     UI.updateUndo();
+    UI.renderGuide();
+    UI.renderLog();
+    UI.updateWireLabels();
+    requestAnimationFrame(function () { UI.fitToContent(); });
+    if (state.shareLoaded) {
+      UI.toast('打开朋友分享的电路啦', 'good', { silent: true });
+      UI.speakAuto('打开朋友分享的电路啦。可以随便改，也可以再分享给别人。');
+      state.shareLoaded = false;
+    }
+    registerServiceWorker();
     /* 首次进入，等用户点过页面后，用中文打个招呼并读一下玩法 */
     var greet = function () {
       document.removeEventListener('pointerdown', greet, true);
@@ -933,17 +1520,32 @@
     document.addEventListener('keydown', greet, true);
   }
 
+  function registerServiceWorker() {
+    if (!global.navigator || !('serviceWorker' in navigator)) return;
+    if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
+    var go = function () {
+      navigator.serviceWorker.register('sw.js').catch(function () {});
+    };
+    if (document.readyState === 'complete') go();
+    else global.addEventListener('load', go, { once: true });
+  }
+
   global.App = {
     STAGE_W: STAGE_W, STAGE_H: STAGE_H,
-    state: state, TASKS: TASKS, PRESETS: PRESETS,
+    state: state, TASKS: TASKS, PRESETS: PRESETS, HOSPITAL: HOSPITAL, GUIDE_STEPS: GUIDE_STEPS,
     byId: byId, defOf: defOf, termPos: termPos, wireEnds: wireEnds,
     formatCurrent: formatCurrent, fmtRes: fmtRes, clamp: clamp,
-    pushHistory: pushHistory, undo: undo, commit: commit,
+    pushHistory: pushHistory, undo: undo, redo: redo, commit: commit,
+    backupCurrent: backupCurrent, hasBackup: hasBackup, restoreBackup: restoreBackup,
+    shareCircuit: shareCircuit,
     makePart: makePart, addPart: addPart, createWire: createWire, findWire: findWire,
     deleteSelection: deleteSelection, deletePart: deletePart, clearBoard: clearBoard,
     afterChange: afterChange, evaluate: evaluate, diagnose: diagnose, termLabel: termLabel,
     startRun: startRun, stopRun: stopRun, toggleRun: toggleRun, setRunUI: setRunUI,
-    loadPreset: loadPreset, audio: audio, init: init, setWireStyle: setWireStyle,
+    loadPreset: loadPreset, loadCase: loadCase, audio: audio, init: init, setWireStyle: setWireStyle,
+    setWireLabels: setWireLabels,
+    recordMeasurement: recordMeasurement, clearLog: clearLog,
+    startGuide: startGuide, skipGuideStep: skipGuideStep, stopGuide: stopGuide, guideStep: guideStep,
     duplicateProps: duplicateProps,
     repairPart: repairPart, stressOf: stressOf, worstStress: worstStress,
     burnVerb: burnVerb, releaseButtons: releaseButtons,

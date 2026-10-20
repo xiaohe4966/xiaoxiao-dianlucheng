@@ -145,6 +145,26 @@
     UI.toast(on ? '点一个小圆点，再点另一个小圆点，就连好啦' : '已退出连线提示');
     App.audio.click();
   }
+  /* 键盘选接线点：回车选第一个点，再 Tab 到另一个点按回车 */
+  function chooseTerminal(termEl) {
+    if (App.state.exploding) return;
+    var t = { part: termEl.dataset.part, term: termEl.dataset.term };
+    var ws = App.state.wireStart;
+    if (ws && (ws.part !== t.part || ws.term !== t.term)) { finishWire(ws, t); return; }
+    if (ws) { cancelWire(); return; }
+    App.state.wireStart = t;
+    termEl.classList.add('armed');
+    setTargets(true);
+    var part = App.byId(t.part);
+    if (part) showPreview(t, App.termPos(part, t.term));
+    UI.toast('选好一个接线点啦，再选另一个接线点', 'good', { silent: true });
+    UI.speak('选好一个接线点啦。再选另一个接线点，就连成一根电线。');
+  }
+  function placeFromPalette(type) {
+    if (App.state.exploding || !PARTS[type]) return;
+    var spot = freeSpot(PARTS[type]);
+    App.addPart(type, spot.x, spot.y);
+  }
 
   /* ---------- 指针移动 / 抬起 ---------- */
   function onMove(e) {
@@ -170,6 +190,7 @@
       drag.el.style.left = part.x + 'px';
       drag.el.style.top = part.y + 'px';
       UI.renderWires();
+      if (UI.scheduleQuickPosition) UI.scheduleQuickPosition();
       drag.el.classList.add('dragging');
       return;
     }
@@ -251,17 +272,26 @@
     var tag = (e.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
     if (!UI.el.modalRoot.hidden) return;
+    /* 焦点在按钮 / 零件 / 接线点上时，空格属于这个控件，不能偷偷给电路通断电 */
+    if (e.target.closest && e.target.closest('button, a, [role="button"], [contenteditable="true"]')) return;
+    var mod = e.metaKey || e.ctrlKey;
+    if (mod && e.key.toLowerCase() === 'z') {
+      e.preventDefault();
+      if (e.shiftKey) App.redo();
+      else App.undo();
+      return;
+    }
+    if (mod && e.key.toLowerCase() === 'y') {
+      e.preventDefault();
+      App.redo();
+      return;
+    }
     if ((e.key === 'Delete' || e.key === 'Backspace') && App.state.selection) {
       e.preventDefault();
       App.deleteSelection();
       return;
     }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
-      e.preventDefault();
-      App.undo();
-      return;
-    }
-    if (e.key === ' ' && !e.metaKey && !e.ctrlKey) {
+    if (e.key === ' ' && !mod) {
       e.preventDefault();
       App.toggleRun();
     }
@@ -272,6 +302,9 @@
     startSpawn: startSpawn,
     startPartDrag: startPartDrag,
     startTerminal: startTerminal,
-    cancelWire: cancelWire
+    cancelWire: cancelWire,
+    chooseTerminal: chooseTerminal,
+    placeFromPalette: placeFromPalette,
+    freeSpot: freeSpot
   };
 })(window);

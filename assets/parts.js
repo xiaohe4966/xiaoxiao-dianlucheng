@@ -120,6 +120,47 @@
       }
     },
 
+    /* 光敏电阻：光越亮，电阻越小。真实 LDR 在暗处约 200kΩ，强光下约 800Ω。 */
+    ldr: {
+      name: '光敏电阻', short: '光敏电阻', w: 150, h: 124,
+      terms: [{ id: 'a', x: 10, y: 68 }, { id: 'b', x: 140, y: 68 }],
+      model: function (p) {
+        var light = Number(p.props.light);
+        if (!isFinite(light)) light = 50;
+        light = Math.max(0, Math.min(100, light));
+        var r = 200000 * Math.pow(800 / 200000, light / 100);
+        return { kind: 'resistor', a: 'a', b: 'b', r: r };
+      },
+      spec: {
+        maxW: 0.25,
+        text: function (p) {
+          var light = Number(p.props.light);
+          if (!isFinite(light)) light = 50;
+          var r = 200000 * Math.pow(800 / 200000, Math.max(0, Math.min(100, light)) / 100);
+          return '光照 ' + Math.round(light) + '% · 电阻约 ' + fmtR(Math.round(r)) + ' · 额定 1/4W';
+        }
+      },
+      art: function (p) {
+        var light = Number(p.props.light);
+        if (!isFinite(light)) light = 50;
+        light = Math.max(0, Math.min(100, light));
+        var r = 200000 * Math.pow(800 / 200000, light / 100);
+        return svg(150, 124,
+          '<text x="75" y="16" text-anchor="middle" font-size="12" font-weight="800" fill="#6b7280">光敏电阻</text>' +
+          '<line x1="10" y1="68" x2="30" y2="68" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+          '<line x1="120" y1="68" x2="140" y2="68" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+          '<rect x="30" y="50" width="90" height="36" rx="9" fill="#f3e3b8" stroke="#1f2a3a" stroke-width="3"/>' +
+          '<path d="M40 68 q6 -10 12 0 q6 10 12 0 q6 -10 12 0 q6 10 12 0 q6 -10 12 0 q6 10 12 0" fill="none" stroke="#b45309" stroke-width="3" stroke-linecap="round"/>' +
+          '<g opacity="' + (0.2 + light / 140).toFixed(2) + '">' +
+          '<circle cx="47" cy="33" r="7" fill="#ffd166"/>' +
+          '<line x1="47" y1="19" x2="47" y2="12" stroke="#f59e0b" stroke-width="3" stroke-linecap="round"/>' +
+          '<line x1="33" y1="33" x2="26" y2="33" stroke="#f59e0b" stroke-width="3" stroke-linecap="round"/>' +
+          '<line x1="61" y1="33" x2="68" y2="33" stroke="#f59e0b" stroke-width="3" stroke-linecap="round"/></g>' +
+          '<text x="75" y="101" text-anchor="middle" font-size="11" font-weight="800" fill="#8a7857">☀ 光照 ' + Math.round(light) + '%</text>' +
+          '<text x="75" y="117" text-anchor="middle" font-size="12" font-weight="900" fill="#7a6a52">电阻约 ' + fmtR(Math.round(r)) + '</text>');
+      }
+    },
+
     /* 可变电阻（电位器）：拖动滑块就能改变电阻大小 */
     pot: {
       name: '可变电阻', short: '可变电阻', w: 150, h: 104,
@@ -374,6 +415,7 @@
     diode: '<svg viewBox="0 0 64 40"><path d="M6 20h12M46 20h12" stroke="#b8c2cc" stroke-width="4" stroke-linecap="round"/><rect x="18" y="9" width="28" height="22" rx="4" fill="#2a2a2a" stroke="#111" stroke-width="2"/><rect x="39" y="9" width="7" height="22" fill="#e6e6e6"/></svg>',
     motor: '<svg viewBox="0 0 64 40"><rect x="10" y="12" width="34" height="20" rx="7" fill="#cfd4da" stroke="#22314a" stroke-width="2.6"/><rect x="10" y="12" width="7" height="20" rx="3.5" fill="#9aa3ad" stroke="#22314a" stroke-width="2"/><line x1="44" y1="22" x2="51" y2="22" stroke="#6b7280" stroke-width="4" stroke-linecap="round"/><path d="M54 17q4 5 0 10q-4 -5 0 -10" fill="#60a5fa" stroke="#22314a" stroke-width="1.8"/></svg>',
     button: '<svg viewBox="0 0 64 40"><path d="M6 27h8M50 27h8" stroke="#8c8c8c" stroke-width="4" stroke-linecap="round"/><rect x="14" y="14" width="36" height="24" rx="8" fill="#e3e8ee" stroke="#22314a" stroke-width="2.6"/><circle cx="32" cy="28" r="8.5" fill="#ef4444" stroke="#22314a" stroke-width="2.4"/></svg>',
+    ldr: '<svg viewBox="0 0 64 40"><path d="M4 22h10M50 22h10" stroke="#9aa7b8" stroke-width="4" stroke-linecap="round"/><rect x="14" y="13" width="36" height="18" rx="8" fill="#f3e3b8" stroke="#22314a" stroke-width="2.4"/><path d="M19 22q4-7 8 0t8 0t8 0" fill="none" stroke="#b45309" stroke-width="2.4"/><circle cx="47" cy="8" r="4" fill="#ffd166"/><path d="M47 1v-2M54 8h3M40 8h-3" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/></svg>',
     pot: '<svg viewBox="0 0 64 40"><path d="M6 28h8M50 28h8" stroke="#9aa7b8" stroke-width="4" stroke-linecap="round"/><rect x="14" y="20" width="36" height="16" rx="6" fill="#f0dcc0" stroke="#22314a" stroke-width="2.4"/><circle cx="32" cy="12" r="7" fill="#94a3b8" stroke="#22314a" stroke-width="2.2"/><path d="M32 19v2" stroke="#22314a" stroke-width="2.4"/><path d="M32 24l-3.5-5h7z" fill="#22314a"/></svg>',
     fuse: '<svg viewBox="0 0 64 40"><path d="M4 20h8M52 20h8" stroke="#9aa7b8" stroke-width="4" stroke-linecap="round"/><rect x="12" y="10" width="40" height="20" rx="8" fill="#e0f2fe" stroke="#22314a" stroke-width="2.4"/><rect x="12" y="12" width="7" height="16" rx="3" fill="#cbd5e1" stroke="#22314a" stroke-width="2"/><rect x="45" y="12" width="7" height="16" rx="3" fill="#cbd5e1" stroke="#22314a" stroke-width="2"/><path d="M19 20h26" stroke="#f59e0b" stroke-width="3" stroke-linecap="round"/></svg>',
     ammeter: '<svg viewBox="0 0 64 40"><circle cx="32" cy="20" r="15" fill="#fffdf8" stroke="#22314a" stroke-width="2.6"/><path d="M32 20l-7-9" stroke="#ef4444" stroke-width="2.6" stroke-linecap="round"/><text x="32" y="31" text-anchor="middle" font-size="12" font-weight="900" fill="#0f766e">A</text></svg>',
@@ -386,6 +428,7 @@
     switch: { closed: true },
     button: { pressed: false },
     resistor: { resistance: 100 },
+    ldr: { light: 50 },
     pot: { resistance: 500 },
     led: { color: '#ff5d5d' },
     lamp: {}, buzzer: {}, diode: {}, fuse: {}, motor: {}, ammeter: {}, voltmeter: {}, breadboard: {}
@@ -412,6 +455,11 @@
       what: '电阻是电流的减速带。它把电流变小，保护 LED 不被烧坏。',
       how: '电阻没有方向，随便哪一头接一边，通常和 LED 手拉手串在一起。点中它，还能自己填一个阻值。',
       tip: '100 欧姆电流大，1 千欧电流小。点中电阻，在面板里可以直接输入想要的阻值（1 欧姆到 1 兆欧）。真实的电阻能承受的功率是 1/4 瓦，电流太大它会发烫、冒烟，然后烧坏。'
+    },
+    ldr: {
+      what: '光敏电阻会「看」光线。光越亮，它的电阻越小；光越暗，电阻越大。',
+      how: '两个接线柱没有方向，像普通电阻一样串在电路里。点中它，拖动「光照」滑块，就能模拟天黑和天亮。',
+      tip: '暗处电阻大约 200 千欧，强光下只有 800 欧左右，相差两百多倍。它也能承受 1/4 瓦；用它和 LED 串起来，就能做一盏天黑才亮的小夜灯。'
     },
     pot: {
       what: '可变电阻是一个能拧大拧小的减速带。电阻变小，电流变大，灯就更亮。',
@@ -477,12 +525,23 @@
     return typeof s.text === 'function' ? s.text(part) : (s.text || '');
   }
 
+  var api = {
+    PARTS: PARTS,
+    PART_GUIDES: PART_GUIDES,
+    specTextOf: specTextOf,
+    ledVf: ledVf,
+    PART_ORDER: ['battery', 'wire', 'switch', 'button', 'led', 'resistor', 'ldr', 'lamp', 'motor', 'buzzer', 'pot', 'fuse', 'diode', 'ammeter', 'voltmeter', 'breadboard'],
+    CHIP_ICONS: CHIP_ICONS,
+    DEFAULT_PROPS: DEFAULT_PROPS,
+    fmtR: fmtR
+  };
   global.PARTS = PARTS;
   global.PART_GUIDES = PART_GUIDES;
   global.specTextOf = specTextOf;
   global.ledVf = ledVf;
-  global.PART_ORDER = ['battery', 'wire', 'switch', 'button', 'led', 'resistor', 'lamp', 'motor', 'buzzer', 'pot', 'fuse', 'diode', 'ammeter', 'voltmeter', 'breadboard'];
+  global.PART_ORDER = api.PART_ORDER;
   global.CHIP_ICONS = CHIP_ICONS;
   global.DEFAULT_PROPS = DEFAULT_PROPS;
   global.fmtR = fmtR;
-})(window);
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+})(typeof window !== 'undefined' ? window : globalThis);

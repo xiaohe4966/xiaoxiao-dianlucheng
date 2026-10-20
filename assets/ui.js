@@ -13,8 +13,11 @@
   var lastTaskKey = null;
   var explainTimer = null;
   var autoProblemTimer = null;
-  var revealTimer = null;
+  var quickKey = '';
   var wireHintShown = false;
+  var modalReturnFocus = null;
+  var lastToastText = '';
+  var lastToastAt = 0;
 
   function $(id) { return document.getElementById(id); }
   function on(node, ev, fn) { if (node) node.addEventListener(ev, fn); }
@@ -77,6 +80,7 @@
     el.stageHolder = $('stageHolder');
     el.boardCanvas = $('boardCanvas');
     el.boardPanel = $('boardPanel');
+    el.partQuick = $('partQuick');
     el.emptyHint = $('emptyHint');
     el.statusText = $('statusText');
     el.statusExtra = $('statusExtra');
@@ -90,7 +94,10 @@
     el.btnRun = $('btnRun');
     el.runText = $('runText');
     el.btnUndo = $('btnUndo');
+    el.btnRedo = $('btnRedo');
+    el.btnShare = $('btnShare');
     el.btnWireStyle = $('btnWireStyle');
+    el.btnWireLabels = $('btnWireLabels');
     el.btnSound = $('btnSound');
     el.btnVoice = $('btnVoice');
     el.voiceText = $('voiceText');
@@ -98,6 +105,10 @@
     el.btnListenDoctor = $('btnListenDoctor');
     el.statusPill = $('statusPill');
     el.doctorBubble = $('doctorBubble');
+    el.guideBody = $('guideBody');
+    el.guideProgress = $('guideProgress');
+    el.logList = $('logList');
+    el.btnLogClear = $('btnLogClear');
     el.modalRoot = $('modalRoot');
     el.modalCard = $('modalCard');
     el.toastRoot = $('toastRoot');
@@ -111,9 +122,15 @@
 
     on($('btnRun'), 'click', function () { App.toggleRun(); });
     on(el.btnUndo, 'click', function () { App.undo(); });
+    on(el.btnRedo, 'click', function () { App.redo(); });
+    on(el.btnShare, 'click', function () { App.shareCircuit(); });
     on($('btnClear'), 'click', function () { App.clearBoard(); });
     on($('btnHelp'), 'click', showHelp);
     on($('btnExamples'), 'click', showExamples);
+    on($('btnHospital'), 'click', showHospital);
+    on($('btnLogRecord'), 'click', function () { App.recordMeasurement(); });
+    on(el.btnLogClear, 'click', function () { App.clearLog(); });
+    on(el.btnWireLabels, 'click', function () { App.setWireLabels(!App.state.wireLabels); });
     on(el.btnWireStyle, 'click', function () {
       App.setWireStyle(App.state.wireStyle === 'ortho' ? 'curve' : 'ortho');
     });
@@ -140,12 +157,50 @@
     on(el.statusPill, 'click', function () { ensureVoice(); speakProblem(true); });
     on($('zoomIn'), 'click', function () { setZoom(App.state.zoom + 0.2); });
     on($('zoomOut'), 'click', function () { setZoom(App.state.zoom - 0.2); });
-    on($('zoomFit'), 'click', function () { setZoom(1); });
+    on($('zoomFit'), 'click', function () { fitToContent(); });
+    /* 触控板双指捏合 / 按住 Ctrl 滚轮：在电路板上缩放 */
+    el.boardCanvas.addEventListener('wheel', function (e) {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      setZoom(App.state.zoom * (e.deltaY < 0 ? 1.12 : 0.89));
+    }, { passive: false });
+    el.boardCanvas.addEventListener('scroll', scheduleQuickPosition, { passive: true });
+    on(el.partQuick, 'focusout', function () {
+      setTimeout(function () {
+        if (el.partQuick.hidden) return;
+        renderInspector();
+        if (!el.partQuick.contains(document.activeElement)) renderQuickEditor();
+      }, 0);
+    });
+    on(el.partQuick, 'keydown', function (e) {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      var sel = App.state.selection;
+      var id = sel && sel.kind === 'part' ? sel.id : null;
+      select(null);
+      if (id && partEls[id] && partEls[id].focus) partEls[id].focus();
+    });
 
     on(el.modalRoot, 'click', function (e) {
       if (e.target.hasAttribute('data-close') || e.target.closest('.modal-close')) closeModal();
     });
-    on(document, 'keydown', function (e) { if (e.key === 'Escape') { closeModal(); if (global.Interact) Interact.cancelWire(); } });
+    on(el.modalRoot, 'keydown', function (e) {
+      if (e.key !== 'Tab' || el.modalRoot.hidden) return;
+      var f = Array.prototype.filter.call(
+        el.modalCard.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'),
+        function (n) { return !n.disabled && n.offsetParent !== null; }
+      );
+      if (!f.length) return;
+      var first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    });
+    on(document, 'keydown', function (e) {
+      if (e.key !== 'Escape') return;
+      if (!el.modalRoot.hidden) closeModal();
+      if (global.Interact) Interact.cancelWire();
+    });
 
     var pressX = 0, pressY = 0;
     on(el.partsLayer, 'pointerdown', function (e) {
@@ -177,7 +232,6 @@
           extra = '现在它里面有' + App.formatCurrent(info.current) + '的电流。';
         }
         explainPart(part, extra);
-        revealEditor();
       }, 230);
     });
     on(el.partsLayer, 'dblclick', function (e) {
@@ -187,6 +241,29 @@
       var partEl = e.target.closest('.part');
       /* 开关和按钮要用手按，双击不删它们，免得按两下就没了 */
       if (partEl && partEl.dataset.type !== 'switch' && partEl.dataset.type !== 'button') {
+        App.deletePart(partEl.dataset.id);
+      }
+    });
+    /* 键盘连线：Tab 到接线点，按回车选第一个点，再 Tab + 回车选第二个点 */
+    on(el.partsLayer, 'click', function (e) {
+      var term = e.target.closest('.terminal');
+      if (!term || e.detail !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (Interact.chooseTerminal) Interact.chooseTerminal(term);
+    });
+    /* 键盘选中零件：回车听讲解，Delete 删除 */
+    on(el.partsLayer, 'keydown', function (e) {
+      var partEl = e.target.closest('.part');
+      if (!partEl || e.target !== partEl) return;
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        var part = App.byId(partEl.dataset.id);
+        if (!part) return;
+        select({ kind: 'part', id: part.id });
+        explainPart(part);
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
         App.deletePart(partEl.dataset.id);
       }
     });
@@ -242,6 +319,13 @@
       var badge = type === 'wire' ? '<span class="chip-badge">点我</span>' : '';
       chip.innerHTML = badge + icon + '<span>' + label + '</span>';
       on(chip, 'pointerdown', function (e) { Interact.startSpawn(e, type, chip); });
+      /* 键盘用户按回车 / 空格时，浏览器发出的是 detail=0 的 click */
+      on(chip, 'click', function (e) {
+        if (e.detail !== 0) return;
+        e.preventDefault();
+        if (type === 'wire') { toggleWireMode(chip); return; }
+        if (Interact.placeFromPalette) Interact.placeFromPalette(type);
+      });
 
       var info = document.createElement('button');
       info.type = 'button';
@@ -270,10 +354,11 @@
     var def = PARTS[part.type];
     var terms = def.terms.map(function (t) {
       return '<button class="terminal' + (t.tone ? ' t-' + t.tone : '') + '" data-part="' + part.id + '" data-term="' + t.id +
-        '" title="接线点" style="left:' + t.x + 'px;top:' + t.y + 'px">' + (t.label || '') + '</button>';
+        '" title="接线点" aria-label="' + def.name + '的接线点 ' + (t.label || t.id) +
+        '，按回车开始连线" style="left:' + t.x + 'px;top:' + t.y + 'px">' + (t.label || '') + '</button>';
     }).join('');
     return '<div class="part-body"></div>' + def.art(part) + terms +
-      '<button class="part-del" title="删除">🗑️</button>' +
+      '<button class="part-del" title="删除" tabindex="-1">🗑️</button>' +
       '<span class="part-badge"></span>';
   }
   function syncPartEl(part, selectedId) {
@@ -297,6 +382,11 @@
     node.style.top = part.y + 'px';
     node.style.width = def.w + 'px';
     node.style.height = def.h + 'px';
+    node.tabIndex = 0;
+    node.setAttribute('role', 'button');
+    node.setAttribute('aria-label', def.name + '，按回车听讲解，按 Delete 删除');
+    var delBtn = node.querySelector('.part-del');
+    if (delBtn) delBtn.tabIndex = selectedId === part.id ? 0 : -1;
     node.classList.toggle('selected', !!(selectedId && selectedId === part.id));
     node.classList.toggle('is-led', part.type === 'led');
     node.classList.toggle('is-pressed', part.type === 'button' && !!part.props.pressed);
@@ -333,6 +423,11 @@
     var sim = App.state.sim;
     var running = App.state.running;
     var sel = App.state.selection;
+    var fault = App.state.lastFault;
+    var shortWire = {};
+    if ((running || App.state.exploding) && fault && fault.code === 'short') {
+      (fault.wireIds || []).forEach(function (id) { shortWire[id] = 1; });
+    }
     var html = '';
     var sig = wireRenderSig();
     var useCache = !!(lastWirePaths && lastWireSig === sig);
@@ -371,6 +466,7 @@
       }
       var dots = '';
       var g = '<g class="wire ' + (active ? 'active' : 'idle') + (hot ? ' hot' : '') +
+        (shortWire[w.id] ? ' short-path' : '') +
         ((sel && sel.kind === 'wire' && sel.id === w.id) ? ' selected' : '') +
         '" data-wire="' + w.id + '" style="--wire:' + (w.color || '#c8bfa9') + '">' +
         '<path class="wire-hit" d="' + d + '"/>' +
@@ -417,6 +513,23 @@
       xtt.textContent = '删除这根电线';
       xg.appendChild(xtt); xg.appendChild(xc); xg.appendChild(xt);
       g.appendChild(xg);
+      /* 电流标签：缩放时反向放大，保证屏幕上的字号差不多 */
+      if (App.state.wireLabels && running && info && Math.abs(info.current) > 0.0008 &&
+          !(sel && sel.kind === 'wire' && sel.id === g.dataset.wire)) {
+        var lg = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        lg.setAttribute('class', 'wire-label');
+        lg.setAttribute('transform', 'translate(' + r1(mid.x) + ' ' + r1(mid.y) + ') scale(' + xk.toFixed(2) + ')');
+        var lr = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        lr.setAttribute('x', '-31'); lr.setAttribute('y', '-40');
+        lr.setAttribute('width', '62'); lr.setAttribute('height', '22');
+        lr.setAttribute('rx', '9');
+        var lt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        lt.setAttribute('x', '0'); lt.setAttribute('y', '-24');
+        lt.setAttribute('text-anchor', 'middle');
+        lt.textContent = App.formatCurrent(info.current);
+        lg.appendChild(lr); lg.appendChild(lt);
+        g.appendChild(lg);
+      }
       wireVisuals[g.dataset.wire] = { group: g, path: path, flow: wicket, dots: dots, length: len };
     });
   }
@@ -875,28 +988,18 @@
     Object.keys(partEls).forEach(function (id) { partEls[id].classList.toggle('selected', id === selId); });
     renderWires();
     renderInspector();
-  }
-  /* 点了电阻 / 可变电阻后，如果「改阻值」的控件不在眼前（小窗口、平板横条、手机），
-     就自动滚过去并闪一下边框，免得小朋友找不到改哪里。 */
-  function revealEditor() {
-    var target = el.inspectBody && el.inspectBody.querySelector('#resInput, #potRange');
-    if (!target) return;
-    var r = target.getBoundingClientRect();
-    var vw = global.innerWidth || 1200, vh = global.innerHeight || 800;
-    if (r.top >= 8 && r.bottom <= vh - 8 && r.left >= 8 && r.right <= vw - 8) return;
-    if (target.scrollIntoView) target.scrollIntoView({ block: 'center', inline: 'center' });
-    var card = el.inspectCard;
-    if (!card) return;
-    card.classList.remove('attention');
-    void card.offsetWidth;
-    card.classList.add('attention');
-    clearTimeout(revealTimer);
-    revealTimer = setTimeout(function () { card.classList.remove('attention'); }, 1600);
+    renderQuickEditor();
   }
 
   /* ---------- 根据仿真结果更新零件外观 ---------- */
   function refreshFromSim() {
     var sim = App.state.sim, running = App.state.running;
+    var faultNow = App.state.lastFault;
+    var shortParts = {};
+    if ((running || App.state.exploding) && faultNow && faultNow.code === 'short') {
+      (faultNow.partIds || []).forEach(function (id) { shortParts[id] = 1; });
+      if (faultNow.partId) shortParts[faultNow.partId] = 1;
+    }
     App.state.parts.forEach(function (p) {
       var node = partEls[p.id]; if (!node) return;
       var info = sim && sim.parts[p.id];
@@ -924,6 +1027,7 @@
       node.classList.toggle('is-burnt', burnt);
       node.classList.toggle('is-hot', !burnt && heat > 0.02);
       node.classList.toggle('is-rev', !!(info && info.reversed) && !burnt);
+      node.classList.toggle('is-short-path', !!shortParts[p.id] && !burnt);
       /* 电流表和电压表上的数字：断电时显示 0 */
       if (p.type === 'ammeter' || p.type === 'voltmeter') {
         var read = node.querySelector('.meter-read');
@@ -933,7 +1037,6 @@
           else read.textContent = liveRead ? Math.abs(info.vdrop).toFixed(2) + ' V' : '0.00 V';
         }
       }
-      var faultNow = App.state.lastFault;
       var live = running || App.state.exploding;   /* 爆炸动画期间也要继续提示是谁短路 */
       var battLoad = 0;
       if (p.type === 'battery' && sim && sim.batteries) {
@@ -1194,6 +1297,7 @@
         : (fault.code === 'burnt' ? '零件烧坏了，点它换一个新的' : '还没通电，电流在睡觉'));
     renderTasks();
     renderInspector();
+    renderQuickEditor();
     autoProblemVoice(fault, sim);
   }
   function renderTasks() {
@@ -1215,6 +1319,100 @@
         speak(text);
       });
     });
+  }
+
+  /* ---------- 引导搭建 ---------- */
+  function renderGuide() {
+    if (!el.guideBody) return;
+    var st = App.state;
+    var steps = App.GUIDE_STEPS || [];
+    var step = App.guideStep ? App.guideStep() : null;
+    if (st.guide && st.guide.active && step) {
+      if (el.guideProgress) el.guideProgress.textContent = (st.guide.step + 1) + ' / ' + steps.length;
+      el.guideBody.innerHTML =
+        '<div class="guide-step"><span class="guide-icon">' + step.icon + '</span>' +
+        '<div><b>' + step.title + '</b><p>' + step.tip + '</p></div></div>' +
+        '<div class="guide-actions">' +
+        '<button class="btn small" id="guideSkip" type="button">跳过这步</button>' +
+        '<button class="btn small ghost" id="guideStop" type="button">关掉引导</button></div>';
+      on($('guideSkip'), 'click', function () { App.skipGuideStep(); });
+      on($('guideStop'), 'click', function () { App.stopGuide(); });
+      return;
+    }
+    if (st.guide && steps.length && st.guide.step >= steps.length) {
+      if (el.guideProgress) el.guideProgress.textContent = '完成';
+      el.guideBody.innerHTML = '<p class="guide-done">🎉 你已经搭出了一个会亮的 LED 电路，已经是小小电路工程师啦！</p>' +
+        '<button class="btn small good" id="guideAgain" type="button">再搭一次</button>';
+      on($('guideAgain'), 'click', function () { App.startGuide(); });
+      return;
+    }
+    if (el.guideProgress) el.guideProgress.textContent = '';
+    el.guideBody.innerHTML = '<p class="guide-intro">跟着小电，一步一步放电池、电阻和 LED，连成一个会亮的电路。</p>' +
+      '<button class="btn small" id="guideStart" type="button">🧭 开始搭</button>';
+    on($('guideStart'), 'click', function () { App.startGuide(); });
+  }
+
+  /* ---------- 实验记录 ---------- */
+  function renderLog() {
+    if (!el.logList) return;
+    var log = App.state.log || [];
+    if (el.btnLogClear) el.btnLogClear.hidden = !log.length;
+    if (!log.length) {
+      el.logList.innerHTML = '<p class="log-empty">通电后点「记下读数」，就能像科学家一样记录实验啦。</p>';
+      return;
+    }
+    el.logList.innerHTML = log.map(function (x) {
+      var d = new Date(x.at || Date.now());
+      var hh = ('0' + d.getHours()).slice(-2), mm = ('0' + d.getMinutes()).slice(-2);
+      var time = hh + ':' + mm;
+      var volt = Number(x.voltage) > 0 ? Number(x.voltage).toFixed(1) + 'V · ' : '';
+      var text = '实验记录 ' + time + '：总电流 ' + App.formatCurrent(x.current) + '，' +
+        volt + (x.active || 0) + ' 个零件在工作。';
+      return '<div class="log-item" data-speak="' + text + '">' +
+        '<span class="log-time">' + time + '</span>' +
+        '<b>' + App.formatCurrent(x.current) + '</b>' +
+        '<span class="log-meta">' + volt + (x.active || 0) + ' 个工作</span></div>';
+    }).join('');
+    Array.prototype.forEach.call(el.logList.querySelectorAll('.log-item'), function (n) {
+      on(n, 'click', function () { speak(n.getAttribute('data-speak') || n.textContent); });
+    });
+  }
+
+  /* ---------- 电路医院 ---------- */
+  function showHospital() {
+    var ids = Object.keys(App.HOSPITAL || {});
+    openModal(
+      '<h2>🏥 电路医院</h2><p class="sub">这里有生病的电路。点一个病例，帮小电修好它，完成后会有奖励。</p>' +
+      '<div class="case-grid">' +
+      ids.map(function (id) {
+        var c = App.HOSPITAL[id];
+        return '<button class="case-card" type="button" data-case="' + id + '" data-speak="' +
+          c.name + '。' + c.desc + ' 你的任务是：' + c.goal + '">' +
+          '<span class="case-icon">' + c.icon + '</span><b>' + c.name + '</b>' +
+          '<span>' + c.desc + '</span><em>任务：' + c.goal + '</em></button>';
+      }).join('') +
+      '</div>',
+      '电路医院。这里有生病的电路，点一个病例，帮小电修好它。'
+    );
+    Array.prototype.forEach.call(el.modalCard.querySelectorAll('[data-case]'), function (b) {
+      on(b, 'click', function () { App.loadCase(b.dataset.case); closeModal(); });
+    });
+  }
+
+  /* ---------- 确认框 ---------- */
+  function confirm(title, message, onOk) {
+    openModal(
+      '<h2>' + title + '</h2><p class="sub">' + message + '</p>' +
+      '<div class="confirm-actions">' +
+      '<button class="btn ghost" id="cfCancel" type="button">再想想</button>' +
+      '<button class="btn run" id="cfOk" type="button">好呀</button></div>'
+    );
+    on($('cfCancel'), 'click', closeModal);
+    var ok = $('cfOk');
+    if (ok) {
+      on(ok, 'click', function () { closeModal(); onOk(); });
+      if (ok.focus) ok.focus();
+    }
   }
 
   /* ---------- 选中零件面板 ---------- */
@@ -1297,7 +1495,9 @@
     var activeEl = document.activeElement;
     if (sel && sel.kind === 'part' && activeEl &&
         ((activeEl.id === 'potRange' && activeEl.dataset.part === sel.id) ||
-         (activeEl.id === 'resInput' && activeEl.dataset.part === sel.id))) return;
+         (activeEl.id === 'ldrRange' && activeEl.dataset.part === sel.id) ||
+         (activeEl.id === 'resInput' && activeEl.dataset.part === sel.id) ||
+         (el.partQuick && quickEditing(el.partQuick)))) return;
     var key = inspectKey(sel);
     if (key === lastInspectKey) { updateInspectorLive(sel); return; }
     lastInspectKey = key;
@@ -1366,6 +1566,17 @@
     } else if (part.type === 'switch') {
       html += '<div class="opt-row"><button class="opt' + (part.props.closed ? ' on' : '') + '" id="swToggle">' +
         (part.props.closed ? '已合上 · 点我断开' : '已断开 · 点我合上') + '</button></div>';
+    } else if (part.type === 'ldr') {
+      var lightNow = Number(part.props.light);
+      if (!(lightNow >= 0)) lightNow = 50;
+      var ldrR = Math.round(Number(PARTS.ldr.model(part).r) || 0);
+      html += '<div class="pot-row">' +
+        '<div class="pot-slider">' +
+        '<input type="range" id="ldrRange" data-part="' + part.id + '" min="0" max="100" step="1" value="' + lightNow + '" aria-label="拖动改变光照强度">' +
+        '<div class="pot-scale"><span>🌑 很暗</span><span>☀️ 很亮</span></div>' +
+        '</div>' +
+        '<span class="pot-val" id="ldrVal">' + lightNow + '%<br>' + App.fmtRes(ldrR) + '</span></div>' +
+        '<p class="inspect-desc">光越亮，光敏电阻的阻值越小。把它和 LED 串起来，就能做一个「天黑才亮」的小灯。</p>';
     } else if (part.type === 'pot') {
       var rv = Number(part.props.resistance);
       if (!(rv >= 0)) rv = 500;
@@ -1405,21 +1616,57 @@
     /* 电位器：拖动滑块改电阻。拖动时不要重建面板（见 renderInspector 开头的判断） */
     var range = $('potRange');
     if (range) {
-      var remember = function () { App.pushHistory(); };
-      on(range, 'pointerdown', remember);
-      on(range, 'keydown', remember);
-      on(range, 'input', function () {
-        part.props.resistance = Number(range.value);
-        var lab = $('potVal');
-        if (lab) lab.textContent = App.fmtRes(part.props.resistance);
-        App.evaluate();
-      });
-      on(range, 'change', function () {
+      var potDirty = false;
+      var settlePot = function () {
+        if (!potDirty) return;
+        potDirty = false;
         App.commit();
         renderParts();
         App.audio.click();
         speak('电阻调到' + App.fmtRes(part.props.resistance) + '。');
+      };
+      on(range, 'input', function () {
+        var rv = Number(range.value);
+        if (!potDirty && rv !== Number(part.props.resistance)) { potDirty = true; App.pushHistory(); }
+        part.props.resistance = rv;
+        var lab = $('potVal');
+        if (lab) lab.textContent = App.fmtRes(part.props.resistance);
+        renderParts();
+        App.evaluate();
       });
+      on(range, 'change', settlePot);
+      on(range, 'pointerup', settlePot);
+      on(range, 'pointercancel', settlePot);
+      on(range, 'keyup', function (e) { if (QUICK_KEYS[e.key]) settlePot(); });
+      on(range, 'blur', settlePot);
+    }
+    /* 光敏电阻：拖滑块调整光照，阻值会跟着变 */
+    var ldrRange = $('ldrRange');
+    if (ldrRange) {
+      var ldrDirty = false;
+      var settleLdr = function () {
+        if (!ldrDirty) return;
+        ldrDirty = false;
+        App.commit();
+        renderParts();
+        App.audio.click();
+        speak('光照调到 ' + part.props.light + '%。光敏电阻现在是' +
+          App.fmtRes(Math.round(Number(PARTS.ldr.model(part).r) || 0)) + '。');
+      };
+      on(ldrRange, 'input', function () {
+        var light = Number(ldrRange.value);
+        if (!ldrDirty && light !== Number(part.props.light)) { ldrDirty = true; App.pushHistory(); }
+        part.props.light = light;
+        var lab = $('ldrVal');
+        if (lab) lab.innerHTML = part.props.light + '%<br>' + App.fmtRes(Math.round(Number(PARTS.ldr.model(part).r) || 0));
+        renderParts();
+        App.evaluate();
+      });
+      on(ldrRange, 'change', settleLdr);
+      on(ldrRange, 'pointerup', settleLdr);
+      on(ldrRange, 'pointercancel', settleLdr);
+      on(ldrRange, 'keyup', function (e) { if (QUICK_KEYS[e.key]) settleLdr(); });
+      on(ldrRange, 'blur', settleLdr);
     }
     /* 电阻：自己填一个阻值（1Ω～1MΩ） */
     var resInput = $('resInput');
@@ -1477,6 +1724,7 @@
     });
   }
   function changeProp(part, key, value) {
+    if (part.props[key] === value) return;
     App.pushHistory();
     part.props[key] = value;
     App.afterChange();
@@ -1493,6 +1741,397 @@
     speak(part.props.closed ? '开关合上啦，电流可以通过。' : '开关断开啦，电流过不去。');
     renderInspector();
   }
+
+  /* ---------- 零件上方的快捷参数面板 ---------- */
+  var QUICK_TYPES = { battery: 1, resistor: 1, ldr: 1, pot: 1, led: 1, switch: 1, motor: 1 };
+  var QUICK_HINTS = {
+    battery: '选电压', resistor: '调阻值', ldr: '调光照',
+    pot: '调电阻', led: '选颜色', switch: '通 / 断', motor: '正转 / 反转'
+  };
+  var QUICK_KEYS = {
+    ArrowLeft: 1, ArrowRight: 1, ArrowUp: 1, ArrowDown: 1,
+    Home: 1, End: 1, PageUp: 1, PageDown: 1
+  };
+  var LED_COLOR_NAMES = {
+    '#ff5d5d': '红色', '#22c55e': '绿色', '#3b82f6': '蓝色', '#facc15': '黄色', '#f8fafc': '白色'
+  };
+  /* 正在拖滑块 / 输入数字时不要重建面板，不然会松手、数字会被清掉 */
+  function quickEditing(node) {
+    var a = document.activeElement;
+    if (!a || !node.contains(a)) return false;
+    var tag = (a.tagName || '').toLowerCase();
+    return tag === 'input' || tag === 'textarea' || tag === 'select' || a.isContentEditable;
+  }
+  function quickKeyFor(part) {
+    var burnt = App.state.burnt && App.state.burnt[part.id] ? 'b' : '';
+    return part.id + '|' + part.type + '|' + burnt;
+  }
+  function quickBody(part) {
+    var p = part.props || {};
+    if (part.type === 'battery') {
+      var bv = Number(p.voltage) || 3;
+      return '<div class="pq-chips" role="group" aria-label="选择电池电压">' + [3, 4.5, 9].map(function (v) {
+        return '<button type="button" class="pq-chip' + (bv === v ? ' on' : '') + '" data-qvoltage="' + v +
+          '" data-qkeep="voltage-' + v + '" aria-pressed="' + (bv === v ? 'true' : 'false') + '">' + v + 'V</button>';
+      }).join('') + '</div>';
+    }
+    if (part.type === 'resistor') {
+      var rv = Number(p.resistance) || 100;
+      return '<div class="pq-chips" role="group" aria-label="常用阻值">' + [10, 47, 100, 220, 1000].map(function (v) {
+        return '<button type="button" class="pq-chip' + (rv === v ? ' on' : '') + '" data-qres="' + v +
+          '" data-qkeep="res-' + v + '" aria-pressed="' + (rv === v ? 'true' : 'false') + '">' + App.fmtRes(v) + '</button>';
+      }).join('') + '</div>' +
+        '<div class="pq-res-edit"><span class="pq-unit">阻值</span>' +
+        '<input type="number" id="qResInput" data-qkeep="res-input" inputmode="numeric" min="1" max="1000000" step="10" value="' + rv + '" aria-label="输入电阻值">' +
+        '<span class="pq-unit">Ω</span>' +
+        '<button type="button" class="pq-apply" id="qResApply" data-qkeep="res-apply">好了</button></div>';
+    }
+    if (part.type === 'led') {
+      var color = p.color || '#ff5d5d';
+      return '<div class="pq-swatches" role="group" aria-label="选择 LED 颜色">' + ['#ff5d5d', '#22c55e', '#3b82f6', '#facc15', '#f8fafc'].map(function (c) {
+        var name = LED_COLOR_NAMES[c] || '颜色';
+        return '<button type="button" class="pq-swatch' + (color === c ? ' on' : '') + '" data-qcolor="' + c +
+          '" data-qkeep="led-' + c.replace('#', '') + '" style="background:' + c + '" aria-label="' + name +
+          '" title="' + name + '" aria-pressed="' + (color === c ? 'true' : 'false') + '"></button>';
+      }).join('') + '</div>';
+    }
+    if (part.type === 'switch') {
+      var closed = !!p.closed;
+      return '<button type="button" class="pq-toggle' + (closed ? ' on' : '') + '" id="qSwToggle" data-qkeep="switch" aria-pressed="' +
+        (closed ? 'true' : 'false') + '"><span class="pq-led" aria-hidden="true"></span><span>' +
+        (closed ? '已合上 · 点我断开' : '已断开 · 点我合上') + '</span></button>';
+    }
+    if (part.type === 'motor') {
+      return '<button type="button" class="pq-btn" id="qMotorRev" data-qkeep="motor-rev">🔄 调换两根线，反转电机</button>';
+    }
+    if (part.type === 'ldr') {
+      var light = Number(p.light);
+      if (!(light >= 0)) light = 50;
+      light = Math.max(0, Math.min(100, Math.round(light)));
+      var lr = Number(PARTS.ldr.model(part).r) || 0;
+      return '<div class="pq-slider"><span class="pq-side" aria-hidden="true">🌑</span>' +
+        '<input type="range" id="qLdrRange" data-qkeep="ldr-range" min="0" max="100" step="1" value="' + light +
+        '" aria-label="光照强度" aria-valuetext="光照 ' + light + '%，电阻约 ' + App.fmtRes(Math.round(lr)) + '">' +
+        '<span class="pq-side" aria-hidden="true">☀️</span></div>' +
+        '<div class="pq-scale"><span>很暗</span><span>很亮</span></div>' +
+        '<div class="pq-live"><b id="qLdrLight">光照 ' + light + '%</b><span id="qLdrRes">电阻约 ' + App.fmtRes(Math.round(lr)) + '</span></div>';
+    }
+    var rv2 = Number(p.resistance);
+    if (!(rv2 >= 0)) rv2 = 500;
+    return '<div class="pq-slider"><span class="pq-side pq-side-txt" aria-hidden="true">小</span>' +
+      '<input type="range" id="qPotRange" data-qkeep="pot-range" min="0" max="1000" step="10" value="' + rv2 +
+      '" aria-label="电阻大小" aria-valuetext="' + App.fmtRes(rv2) + '">' +
+      '<span class="pq-side pq-side-txt" aria-hidden="true">大</span></div>' +
+      '<div class="pq-scale"><span>0Ω</span><span>1kΩ</span></div>' +
+      '<div class="pq-live"><b id="qPotVal">' + App.fmtRes(rv2) + '</b><span>拖动滑块调电阻</span></div>';
+  }
+  /* 同一个零件的参数变了：只刷新现有控件，不重建面板，键盘焦点不会丢 */
+  function refreshQuickEditor(part, node) {
+    var p = part.props || {};
+    var each = function (sel, fn) {
+      Array.prototype.forEach.call(node.querySelectorAll(sel), fn);
+    };
+    if (part.type === 'battery') {
+      var bv = Number(p.voltage) || 3;
+      each('[data-qvoltage]', function (b) {
+        var on = Number(b.dataset.qvoltage) === bv;
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+    } else if (part.type === 'resistor') {
+      var rv = Number(p.resistance) || 100;
+      each('[data-qres]', function (b) {
+        var on = Number(b.dataset.qres) === rv;
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+      var resInput = node.querySelector('#qResInput');
+      if (resInput && document.activeElement !== resInput) resInput.value = rv;
+    } else if (part.type === 'led') {
+      var color = p.color || '#ff5d5d';
+      each('[data-qcolor]', function (b) {
+        var on = b.dataset.qcolor === color;
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+    } else if (part.type === 'switch') {
+      var sw = node.querySelector('#qSwToggle');
+      var closed = !!p.closed;
+      if (sw) {
+        sw.classList.toggle('on', closed);
+        sw.setAttribute('aria-pressed', closed ? 'true' : 'false');
+        var label = sw.lastElementChild;
+        if (label) label.textContent = closed ? '已合上 · 点我断开' : '已断开 · 点我合上';
+      }
+    } else if (part.type === 'ldr') {
+      var light = Number(p.light);
+      if (!(light >= 0)) light = 50;
+      light = Math.max(0, Math.min(100, Math.round(light)));
+      var rr = Math.round(Number(PARTS.ldr.model(part).r) || 0);
+      var range = node.querySelector('#qLdrRange');
+      if (range) {
+        if (document.activeElement !== range) range.value = light;
+        range.setAttribute('aria-valuetext', '光照 ' + light + '%，电阻约 ' + App.fmtRes(rr));
+      }
+      var lab = node.querySelector('#qLdrLight');
+      if (lab) lab.textContent = '光照 ' + light + '%';
+      var resLab = node.querySelector('#qLdrRes');
+      if (resLab) resLab.textContent = '电阻约 ' + App.fmtRes(rr);
+    } else if (part.type === 'pot') {
+      var rv2 = Number(p.resistance);
+      if (!(rv2 >= 0)) rv2 = 500;
+      var potRange = node.querySelector('#qPotRange');
+      if (potRange) {
+        if (document.activeElement !== potRange) potRange.value = rv2;
+        potRange.setAttribute('aria-valuetext', App.fmtRes(rv2));
+      }
+      var potLab = node.querySelector('#qPotVal');
+      if (potLab) potLab.textContent = App.fmtRes(rv2);
+    }
+  }
+  /* 快捷面板拖滑块时右侧面板不重建（否则会丢焦点），只把读数同步过去 */
+  function syncInspectorSlider(kind, partId, value, html, text) {
+    var range = $(kind === 'ldr' ? 'ldrRange' : 'potRange');
+    var label = $(kind === 'ldr' ? 'ldrVal' : 'potVal');
+    if (range && range.dataset.part === partId) {
+      range.value = value;
+      range.setAttribute('aria-valuetext', text || html.replace(/<br>/g, '，'));
+    }
+    if (label) label.innerHTML = html;
+  }
+  function bindQuickEditor(part, node) {
+    var close = node.querySelector('[data-pq-close]');
+    on(close, 'click', function () {
+      select(null);
+      var pn = partEls[part.id];
+      if (pn && pn.focus) pn.focus();
+    });
+    var repair = node.querySelector('#qRepair');
+    if (repair) on(repair, 'click', function () { App.repairPart(part.id); });
+    Array.prototype.forEach.call(node.querySelectorAll('[data-qvoltage]'), function (b) {
+      on(b, 'click', function () { changeProp(part, 'voltage', parseFloat(b.dataset.qvoltage)); });
+    });
+    Array.prototype.forEach.call(node.querySelectorAll('[data-qres]'), function (b) {
+      on(b, 'click', function () { changeProp(part, 'resistance', parseFloat(b.dataset.qres)); });
+    });
+    Array.prototype.forEach.call(node.querySelectorAll('[data-qcolor]'), function (b) {
+      on(b, 'click', function () { changeProp(part, 'color', b.dataset.qcolor); });
+    });
+    var sw = node.querySelector('#qSwToggle');
+    if (sw) on(sw, 'click', function () { toggleSwitch(part); });
+    var mr = node.querySelector('#qMotorRev');
+    if (mr) on(mr, 'click', function () { reverseMotorWires(part); });
+    var ldrRange = node.querySelector('#qLdrRange');
+    if (ldrRange) {
+      var ldrDirty = false;
+      var beginLdr = function (next) {
+        if (ldrDirty || next === Number(part.props.light)) return;
+        ldrDirty = true;
+        App.pushHistory();
+      };
+      var settleLdr = function () {
+        if (!ldrDirty) return;
+        ldrDirty = false;
+        App.commit();
+        renderParts();
+        renderInspector();
+        App.audio.click();
+        speak('光照调到 ' + Math.round(part.props.light) + '%。光敏电阻现在是' +
+          App.fmtRes(Math.round(Number(PARTS.ldr.model(part).r) || 0)) + '。');
+      };
+      on(ldrRange, 'input', function () {
+        var light = Number(ldrRange.value);
+        beginLdr(light);
+        part.props.light = light;
+        var rr = Math.round(Number(PARTS.ldr.model(part).r) || 0);
+        var lab = node.querySelector('#qLdrLight');
+        var resLab = node.querySelector('#qLdrRes');
+        if (lab) lab.textContent = '光照 ' + light + '%';
+        if (resLab) resLab.textContent = '电阻约 ' + App.fmtRes(rr);
+        ldrRange.setAttribute('aria-valuetext', '光照 ' + light + '%，电阻约 ' + App.fmtRes(rr));
+        syncInspectorSlider('ldr', part.id, light, light + '%<br>' + App.fmtRes(rr));
+        renderParts();
+        App.evaluate();
+      });
+      on(ldrRange, 'change', settleLdr);
+      on(ldrRange, 'pointerup', settleLdr);
+      on(ldrRange, 'pointercancel', settleLdr);
+      on(ldrRange, 'keyup', function (e) { if (QUICK_KEYS[e.key]) settleLdr(); });
+      on(ldrRange, 'blur', settleLdr);
+    }
+    var potRange = node.querySelector('#qPotRange');
+    if (potRange) {
+      var potDirty = false;
+      var beginPot = function (next) {
+        if (potDirty || next === Number(part.props.resistance)) return;
+        potDirty = true;
+        App.pushHistory();
+      };
+      var settlePot = function () {
+        if (!potDirty) return;
+        potDirty = false;
+        App.commit();
+        renderParts();
+        renderInspector();
+        App.audio.click();
+        speak('电阻调到' + App.fmtRes(part.props.resistance) + '。');
+      };
+      on(potRange, 'input', function () {
+        var rv = Number(potRange.value);
+        beginPot(rv);
+        part.props.resistance = rv;
+        var lab = node.querySelector('#qPotVal');
+        if (lab) lab.textContent = App.fmtRes(rv);
+        potRange.setAttribute('aria-valuetext', App.fmtRes(rv));
+        syncInspectorSlider('pot', part.id, rv, App.fmtRes(rv));
+        renderParts();
+        App.evaluate();
+      });
+      on(potRange, 'change', settlePot);
+      on(potRange, 'pointerup', settlePot);
+      on(potRange, 'pointercancel', settlePot);
+      on(potRange, 'keyup', function (e) { if (QUICK_KEYS[e.key]) settlePot(); });
+      on(potRange, 'blur', settlePot);
+    }
+    var resInput = node.querySelector('#qResInput');
+    if (resInput) {
+      var applyRes = function () {
+        var v = Number(resInput.value);
+        if (!isFinite(v) || v <= 0) {
+          toast('请输入 1Ω～1MΩ 之间的数字', null, { silent: true });
+          speak('请输入一个大于零的电阻值。');
+          if (resInput.focus) resInput.focus();
+          return;
+        }
+        v = Math.round(Math.max(1, Math.min(1000000, v)));
+        if (v === Number(part.props.resistance)) { resInput.value = v; return; }
+        App.pushHistory();
+        part.props.resistance = v;
+        if (resInput.blur) resInput.blur();
+        App.afterChange();
+        App.audio.click();
+        speak('电阻改成' + App.fmtRes(v) + '啦。');
+        renderQuickEditor();
+        var again = node.querySelector('#qResInput');
+        if (again && again.focus) {
+          try { again.focus({ preventScroll: true }); } catch (e) { again.focus(); }
+        }
+      };
+      on(resInput, 'keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); applyRes(); }
+      });
+      var resBtn = node.querySelector('#qResApply');
+      if (resBtn) on(resBtn, 'click', applyRes);
+    }
+  }
+  function renderQuickEditor() {
+    var node = el.partQuick;
+    if (!node) return;
+    var st = App.state;
+    var sel = st.selection;
+    var part = sel && sel.kind === 'part' ? App.byId(sel.id) : null;
+    if (!part || !QUICK_TYPES[part.type] || st.exploding) { hideQuickEditor(); return; }
+    if (quickEditing(node)) return;
+    var key = quickKeyFor(part);
+    if (key === quickKey && !node.hidden && node.innerHTML) {
+      refreshQuickEditor(part, node);
+      positionQuickEditor();
+      return;
+    }
+    var def = PARTS[part.type];
+    var burnt = !!(st.burnt && st.burnt[part.id]);
+    var active = document.activeElement;
+    var keep = active && node.contains(active) ? active.getAttribute('data-qkeep') : '';
+    var body = burnt
+      ? '<button type="button" class="pq-btn good" id="qRepair" data-qkeep="repair">🔧 换一个新的</button>'
+      : quickBody(part);
+    quickKey = key;
+    node.setAttribute('aria-label', def.name + '快捷参数');
+    node.innerHTML =
+      '<div class="pq-head">' +
+      '<span class="pq-title">' + iconFor(part.type) + ' ' + def.name + '</span>' +
+      '<span class="pq-hint">' + (burnt ? '已经坏了' : (QUICK_HINTS[part.type] || '')) + '</span>' +
+      '<button type="button" class="pq-close" data-pq-close aria-label="收起参数" title="收起参数">✕</button>' +
+      '</div>' +
+      '<div class="pq-body">' + body + '</div>';
+    node.style.visibility = 'hidden';
+    node.hidden = false;
+    bindQuickEditor(part, node);
+    positionQuickEditor();
+    node.style.visibility = '';
+    if (keep) {
+      var again = node.querySelector('[data-qkeep="' + keep + '"]');
+      if (again && again.focus) {
+        try { again.focus({ preventScroll: true }); } catch (e) { again.focus(); }
+      }
+    }
+  }
+  function hideQuickEditor() {
+    quickKey = '';
+    if (!el.partQuick) return;
+    el.partQuick.hidden = true;
+    el.partQuick.classList.remove('offscreen');
+    el.partQuick.innerHTML = '';
+  }
+  function scheduleQuickPosition() {
+    if (!el.partQuick || el.partQuick.hidden) return;
+    positionQuickEditor();
+  }
+  /* 面板锚在零件正上方；上面放不下就放到下面，再不行就贴住工作台边缘 */
+  function positionQuickEditor() {
+    var node = el.partQuick;
+    if (!node || node.hidden) return;
+    var panel = el.boardPanel, canvas = el.boardCanvas;
+    if (!panel || !canvas) return;
+    var sel = App.state.selection;
+    var partNode = sel && sel.kind === 'part' ? partEls[sel.id] : null;
+    if (!partNode) { node.classList.add('offscreen'); return; }
+    var pr = partNode.getBoundingClientRect();
+    var cr = canvas.getBoundingClientRect();
+    var panelRect = panel.getBoundingClientRect();
+    var view = {
+      left: cr.left, top: cr.top,
+      right: cr.left + canvas.clientWidth,
+      bottom: cr.top + canvas.clientHeight
+    };
+    if (pr.right < view.left - 24 || pr.left > view.right + 24 ||
+        pr.bottom < view.top - 24 || pr.top > view.bottom + 24) {
+      node.classList.add('offscreen');
+      return;
+    }
+    node.classList.remove('offscreen');
+    var w = node.offsetWidth, h = node.offsetHeight;
+    if (!w || !h) return;
+    var gap = 18;
+    var minTop = view.top - panelRect.top + 6;
+    var minLeft = view.left - panelRect.left + 6;
+    var maxLeft = view.right - panelRect.left - w - 6;
+    if (maxLeft < minLeft) {
+      minLeft = 6;
+      maxLeft = Math.max(6, panelRect.width - w - 6);
+    }
+    var above = pr.top - panelRect.top - h - gap;
+    var below = pr.bottom - panelRect.top + gap;
+    var fitsAbove = above >= minTop;
+    var fitsBelow = below + h <= view.bottom - panelRect.top - 6;
+    var belowMode;
+    if (fitsAbove) belowMode = false;
+    else if (fitsBelow) belowMode = true;
+    else belowMode = (view.bottom - pr.bottom) > (pr.top - view.top);
+    var maxTop = Math.max(minTop, view.bottom - panelRect.top - h - 6);
+    var top = belowMode ? below : above;
+    top = Math.max(minTop, Math.min(top, maxTop));
+    var cx = pr.left + pr.width / 2;
+    var left = cx - panelRect.left - w / 2;
+    left = Math.max(minLeft, Math.min(left, maxLeft));
+    node.classList.toggle('below', belowMode);
+    node.style.left = Math.round(left) + 'px';
+    node.style.top = Math.round(top) + 'px';
+    var arrowX = Math.round(cx - panelRect.left - left);
+    arrowX = Math.max(20, Math.min(w - 20, arrowX));
+    node.style.setProperty('--arrow-x', arrowX + 'px');
+  }
+
   /* 把电机的两根线对调：直流电机反接就会反转 */
   function reverseMotorWires(part) {
     var wA = 0, wB = 0, touched = 0;
@@ -1520,7 +2159,7 @@
   }
   function iconFor(type) {
     var map = {
-      battery: '🔋', switch: '🎚️', button: '🔘', resistor: '🧱', pot: '🎛️', led: '💡', lamp: '🔆',
+      battery: '🔋', switch: '🎚️', button: '🔘', resistor: '🧱', ldr: '☀️', pot: '🎛️', led: '💡', lamp: '🔆',
       buzzer: '🔊', diode: '▶️', fuse: '🧯', motor: '🌀', breadboard: '🧰',
       ammeter: '<span class="ico-badge">A</span>', voltmeter: '<span class="ico-badge v">V</span>'
     };
@@ -1532,6 +2171,7 @@
       switch: '像一座小桥，点一下可以断开或合上，控制电流过不过去。',
       button: '按住才通电的开关，一松手就断开。',
       resistor: '电流的减速带，保护 LED 不被太大的电流烧坏。',
+      ldr: '光敏电阻：光越亮，阻值越小；用手遮住它，阻值就会变大。',
       pot: '可以拧大拧小的电阻，用来调灯的亮度。',
       led: '长脚(+)接电池正极，短脚接负极，电流通过就会发光。',
       lamp: '灯丝被电流加热就发光。它自己会限制电流，可以直接接电池。',
@@ -1582,7 +2222,19 @@
       ? '横竖走线已打开：电线横平竖直、自动避开零件；点一下换回弯弯的曲线'
       : '把电线排成横竖走线，自动避开零件、看起来更整齐';
   }
-  function updateUndo() { el.btnUndo.disabled = !App.state.past.length; }
+  function updateWireLabels() {
+    if (!el.btnWireLabels) return;
+    var on = !!App.state.wireLabels;
+    el.btnWireLabels.classList.toggle('active', on);
+    el.btnWireLabels.setAttribute('aria-pressed', on ? 'true' : 'false');
+    el.btnWireLabels.title = on
+      ? '电流标签已打开：通电后每根电线上会显示电流；点一下关掉'
+      : '打开后，通电时每根电线上会显示电流';
+  }
+  function updateUndo() {
+    if (el.btnUndo) el.btnUndo.disabled = !App.state.past.length;
+    if (el.btnRedo) el.btnRedo.disabled = !App.state.future || !App.state.future.length;
+  }
 
   /* ---------- 缩放 ---------- */
   function setZoom(z) { App.state.zoom = App.clamp(z, 0.6, 3); applyZoom(); }
@@ -1601,6 +2253,44 @@
     el.stageHolder.style.height = (App.STAGE_H * s) + 'px';
     /* 缩放变化时，选中的电线要重画，✕ 才能保持合适大小 */
     if (App.state.selection && App.state.selection.kind === 'wire') renderWires();
+    scheduleQuickPosition();
+  }
+  function contentBounds() {
+    var st = App.state;
+    if (!st.parts.length) return null;
+    var x1 = 1e9, y1 = 1e9, x2 = -1e9, y2 = -1e9;
+    st.parts.forEach(function (p) {
+      var def = PARTS[p.type];
+      if (!def) return;
+      x1 = Math.min(x1, p.x); y1 = Math.min(y1, p.y);
+      x2 = Math.max(x2, p.x + def.w); y2 = Math.max(y2, p.y + def.h);
+    });
+    if (x2 < x1) return null;
+    return { x1: x1, y1: y1, x2: x2, y2: y2, w: x2 - x1, h: y2 - y1 };
+  }
+  /* 把镜头拉近到「所有零件都在画面里」，小屏上特别有用 */
+  function fitToContent() {
+    var c = el.boardCanvas;
+    if (!c || !c.clientWidth) return;
+    var b = contentBounds();
+    if (!b) {
+      App.state.zoom = 1;
+      applyZoom();
+      c.scrollLeft = 0; c.scrollTop = 0;
+      return;
+    }
+    var s0 = Math.min((c.clientWidth - 18) / App.STAGE_W, (c.clientHeight - 18) / App.STAGE_H);
+    s0 = Math.max(0.18, s0);
+    var zx = (c.clientWidth - 56) / Math.max(40, b.w * s0);
+    var zy = (c.clientHeight - 56) / Math.max(40, b.h * s0);
+    App.state.zoom = App.clamp(Math.min(zx, zy), 0.6, 3);
+    applyZoom();
+    var s = App.state.scale || 1;
+    var cx = (b.x1 + b.x2) / 2 * s, cy = (b.y1 + b.y2) / 2 * s;
+    var maxX = Math.max(0, c.scrollWidth - c.clientWidth);
+    var maxY = Math.max(0, c.scrollHeight - c.clientHeight);
+    c.scrollLeft = App.clamp(cx - c.clientWidth / 2, 0, maxX);
+    c.scrollTop = App.clamp(cy - c.clientHeight / 2, 0, maxY);
   }
 
   /* ---------- 爆炸特效 ---------- */
@@ -1649,14 +2339,24 @@
 
   /* ---------- 弹窗 ---------- */
   function openModal(html, speakText) {
+    modalReturnFocus = document.activeElement;
     el.modalCard.innerHTML = '<button class="modal-close" title="关闭" data-nospeak>✕</button>' + html;
     el.modalRoot.hidden = false;
     if (speakText) speak(speakText);
+    setTimeout(function () {
+      if (el.modalRoot.hidden || el.modalCard.contains(document.activeElement)) return;
+      var f = el.modalCard.querySelector('.modal-close');
+      if (f && f.focus) f.focus();
+    }, 30);
   }
   function closeModal() {
     el.modalRoot.hidden = true;
     el.modalCard.innerHTML = '';
     if (global.Voice) Voice.cancel();
+    if (modalReturnFocus && modalReturnFocus.focus) {
+      try { modalReturnFocus.focus(); } catch (e) {}
+    }
+    modalReturnFocus = null;
   }
   function showHelp() {
     openModal(
@@ -1665,14 +2365,20 @@
       '<div class="help-item" data-speak="第一步，放进零件。从左边零件箱拖到工作台，或者点一下零件，它会自己跳进去。"><span class="n">1</span><p><b>放进零件：</b>从左边零件箱拖到工作台，或者点一下零件，它会自己跳进去。点零件箱上的小问号，可以听它是做什么的。</p></div>' +
       '<div class="help-item" data-speak="第二步，连电线。点零件上的小圆点，再点另一个小圆点，就连好一根电线。点电线按钮，会提示所有接线点。"><span class="n">2</span><p><b>连电线：</b>点零件上的小圆点，再点另一个小圆点，就连好一根电线。（点「电线」按钮会提示所有接线点）</p></div>' +
       '<div class="help-item" data-speak="第三步，通电。按右上角通电试试，电线里会出现流动的小电流，LED、灯泡、电机、喇叭都会工作。"><span class="n">3</span><p><b>通电：</b>按右上角<b>「通电试试」</b>，电线里会出现流动的小电流，LED、灯泡、电机、喇叭都会工作。</p></div>' +
-      '<div class="help-item" data-speak="第四步，修改和删除。拖动零件可以搬家。选中零件后点垃圾桶删除。点一下电线，中间会出现叉叉，再点它就可以删掉这根电线。按撤销都能找回。"><span class="n">4</span><p><b>修改和删除：</b>拖动零件可以搬家；选中零件后点 🗑️ 删除；点一下<b>电线</b>，中间会出现 <b>✕</b>，再点它就可以删掉这根电线；按「撤销」都能找回。</p></div>' +
+      '<div class="help-item" data-speak="第四步，修改和删除。点一下可以调节的零件，它的头顶上会冒出快捷旋钮，拖滑块、点选项，马上就能调。拖动零件可以搬家。选中零件后点垃圾桶删除。点一下电线，中间会出现叉叉，再点它就可以删掉这根电线。按撤销都能找回。"><span class="n">4</span><p><b>修改和删除：</b>点一下电池、电阻、光敏电阻、可变电阻、LED、开关或电机，<b>零件头顶会冒出快捷旋钮</b>，拖滑块、点选项就能马上调；拖动零件可以搬家；选中零件后点 🗑️ 删除；点一下<b>电线</b>，中间会出现 <b>✕</b>，再点它就可以删掉这根电线；按「撤销」都能找回。</p></div>' +
       '<div class="help-item" data-speak="第五步，小心短路。电线不能直接把电池的正极和负极连起来。要在中间放一个灯泡、电阻、电机或者喇叭，不然会爆炸。"><span class="n">5</span><p><b>小心短路：</b>电线不能直接把电池的 + 和 − 连起来！要在中间放一个灯泡、电阻、电机或喇叭，不然会💥爆炸。</p></div>' +
       '<div class="help-item" data-speak="第六步，真实电路里，每个零件都有额定值。LED 额定 20 毫安，电阻额定四分之一瓦，二极管额定 200 毫安，保险丝额定 0.5 安培。电流超过额定值，零件就会发烫冒烟，然后烧坏。保险丝则会自己熔断，保护电池。烧坏以后，点它，再点换一个新的，就能继续玩。"><span class="n">6</span><p><b>零件会烧坏：</b>每个零件都有<b>额定值</b>：LED 20mA、电阻 1/4W、二极管 200mA、保险丝 0.5A……电流超了就会♨️发烫，然后💨烧坏（保险丝是「啪」地熔断，保护大家）。烧坏了点它，再点<b>「🔧 换一个新的」</b>，或者按撤销。</p></div>' +
       '<div class="help-item" data-speak="第七步，认一认零件。电池提供电，电阻像减速带，LED 长脚接正极，二极管是单向门，按钮要按住才通，可变电阻能拧大拧小，保险丝会保护电路，电流表要串联、电压表要并联，面包板的正极轨和负极轨左右相通。"><span class="n">7</span><p><b>认一认：</b>电池提供电；电阻像减速带；LED 长脚接 +；二极管是单向门；<b>按钮</b>要按住才通；<b>可变电阻</b>能拧大拧小；<b>保险丝</b>保护电路；<b>电流表</b>串联、<b>电压表</b>并联；面包板的 + 轨和 − 轨左右相通。</p></div>' +
       '<div class="help-item" data-speak="第八步，听中文讲解。点任何一个零件，都会用中文告诉你它是干什么的。右边的小电会提示哪里有问题，点听问题按钮可以再听一遍。"><span class="n">8</span><p><b>听中文讲解：</b>点任何一个零件，都会用中文告诉你它是干什么的。右边的小电会提示哪里有问题，点「听问题」可以再听一遍。顶部的「朗读」按钮可以开关全站发音。</p></div>' +
-      '</div>',
+      '<div class="help-item" data-speak="第九步，分享和记录。按分享按钮可以复制一个链接，朋友打开就能看到你的电路。通电以后点记下读数，可以把电流和电压记在实验记录里。"><span class="n">9</span><p><b>分享和记录：</b>按「📤 分享」复制链接，朋友打开就能看到你的电路；通电后点「记下读数」，把电流和电压记进实验记录。</p></div>' +
+      '</div>' +
+      (App.hasBackup && App.hasBackup()
+        ? '<div class="modal-actions"><button class="btn small ghost" id="helpRestore" type="button">♻️ 恢复清空前的电路</button></div>'
+        : ''),
       '怎么玩？这里是给小朋友和大朋友的操作说明。点每一行，我都可以念给你听。'
     );
+    var hr = $('helpRestore');
+    if (hr) on(hr, 'click', function () { closeModal(); App.restoreBackup(); });
   }
   function showExamples() {
     openModal(
@@ -1694,6 +2400,11 @@
 
   /* ---------- 提示气泡 ---------- */
   function toast(msg, type, opts) {
+    var now = Date.now();
+    if (msg === lastToastText && now - lastToastAt < 1300) return;
+    lastToastText = msg;
+    lastToastAt = now;
+    while (el.toastRoot.children.length >= 4) el.toastRoot.firstChild.remove();
     var t = document.createElement('div');
     t.className = 'toast' + (type ? ' ' + type : '');
     t.textContent = msg;
@@ -1709,10 +2420,14 @@
     renderAll: renderAll, renderParts: renderParts, renderWires: renderWires,
     refreshFromSim: refreshFromSim, updateHeat: updateHeat, select: select,
     updatePanels: updatePanels, renderTasks: renderTasks, renderInspector: renderInspector,
+    renderQuickEditor: renderQuickEditor, positionQuickEditor: positionQuickEditor,
+    scheduleQuickPosition: scheduleQuickPosition,
     updateRunButton: updateRunButton, setPowered: setPowered, setAlarm: setAlarm,
     updateSound: updateSound, updateVoice: updateVoice, updateUndo: updateUndo,
-    updateWireStyle: updateWireStyle,
-    applyZoom: applyZoom, playBoom: playBoom,
+    updateWireStyle: updateWireStyle, updateWireLabels: updateWireLabels,
+    renderGuide: renderGuide, renderLog: renderLog, showHospital: showHospital, confirm: confirm,
+    applyZoom: applyZoom, fitToContent: fitToContent, contentBounds: contentBounds,
+    setZoom: setZoom, playBoom: playBoom,
     openModal: openModal, closeModal: closeModal, toast: toast,
     speak: speak, speakAuto: speakAuto, speakProblem: speakProblem, explainType: explainType, explainPart: explainPart,
     pressButton: pressButton, reverseMotorWires: reverseMotorWires,

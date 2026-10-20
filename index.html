@@ -6,7 +6,12 @@
 <title>小小电路城 · 儿童电路模拟实验室</title>
 <meta name="description" content="给小朋友的电路模拟器：拖放电池、按钮、开关、电阻、可变电阻、电位器、LED、灯泡、喇叭、二极管、保险丝、电机、电流表、电压表和面包板，连线后通电，看电流流动，电机能正反转，短路会爆炸，保险丝会熔断保护电路。">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23ffd166'/%3E%3Cpath d='M36 8 16 38h13l-4 20 22-32H34z' fill='%2322314a'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="assets/style.css?v=8.26">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#ffd166">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="小小电路城">
+<link rel="apple-touch-icon" href="assets/icons/icon-192.png">
+<link rel="stylesheet" href="assets/style.css?v=8.30">
 </head>
 <body>
 <div class="app">
@@ -24,7 +29,9 @@
     <div class="top-actions">
       <button class="btn ghost" id="btnExamples" type="button" title="示例电路"><span aria-hidden="true">📚</span><span class="hide-sm">示例</span></button>
       <button class="btn ghost" id="btnUndo" type="button" title="撤销 (Ctrl+Z)"><span aria-hidden="true">↩️</span><span class="hide-sm">撤销</span></button>
+      <button class="btn ghost" id="btnRedo" type="button" title="重做 (Ctrl+Shift+Z)" disabled><span aria-hidden="true">↪️</span><span class="hide-sm">重做</span></button>
       <button class="btn ghost" id="btnClear" type="button" title="清空工作台"><span aria-hidden="true">🧹</span><span class="hide-sm">清空</span></button>
+      <button class="btn ghost" id="btnShare" type="button" title="复制分享链接"><span aria-hidden="true">📤</span><span class="hide-sm">分享</span></button>
       <button class="btn ghost" id="btnHelp" type="button" title="怎么玩"><span aria-hidden="true">❓</span><span class="hide-sm">玩法</span></button>
       <button class="btn ghost wire-style-btn" id="btnWireStyle" type="button" aria-pressed="false" title="把电线排成横竖走线，自动避开零件、看起来更整齐"><span aria-hidden="true">📐</span><span class="hide-sm">横竖线</span></button>
       <button class="btn ghost" id="btnSound" type="button" aria-pressed="true" title="音效开关"><span aria-hidden="true">🔊</span><span class="hide-sm">声音</span></button>
@@ -48,8 +55,9 @@
       <div class="board-toolbar">
         <div class="board-title" data-speak="电路工作台。把零件放在这里，再用小圆点连电线。">🔌 电路工作台</div>
         <div class="board-tools">
+          <button type="button" id="btnWireLabels" class="tool-toggle" title="显示每根电线里的电流" aria-pressed="false">电流标签</button>
           <button type="button" id="zoomOut" title="缩小" data-speak="缩小">−</button>
-          <button type="button" id="zoomFit" title="适应窗口" data-speak="适应窗口">适应</button>
+          <button type="button" id="zoomFit" title="适应内容" data-speak="适应内容">适应</button>
           <button type="button" id="zoomIn" title="放大" data-speak="放大">＋</button>
         </div>
       </div>
@@ -66,8 +74,9 @@
           <p>把零件拖到这里<br>再用小圆点连电线</p>
         </div>
       </div>
+      <div class="part-quick" id="partQuick" hidden role="group" aria-label="零件快捷参数"></div>
       <div class="board-status">
-        <div class="status-pill" id="statusPill" data-speak=""><span class="status-dot"></span><span id="statusText">点右上角「通电试试」</span></div>
+        <div class="status-pill" id="statusPill" role="status" aria-live="polite" data-speak=""><span class="status-dot"></span><span id="statusText">点右上角「通电试试」</span></div>
         <div class="status-extra" id="statusExtra"></div>
         <button class="btn ghost tiny" id="btnHearProblem" type="button" title="听一听哪里有问题" data-nospeak>🔊 听问题</button>
       </div>
@@ -88,6 +97,14 @@
         <button class="btn ghost tiny doctor-listen" id="btnListenDoctor" type="button" data-nospeak>🔊 让小电说一遍</button>
       </section>
 
+      <section class="card guide">
+        <div class="card-head">
+          <h3 data-speak="小电带你搭。一步一步做一个会亮的 LED 电路。">🧭 小电带你搭</h3>
+          <span class="guide-progress" id="guideProgress"></span>
+        </div>
+        <div id="guideBody"></div>
+      </section>
+
       <section class="card meter">
         <h3 data-speak="电流表。显示现在有多少电流在跑。">⚡ 电流表</h3>
         <div class="meter-value" id="meterValue">0 mA</div>
@@ -96,8 +113,20 @@
       </section>
 
       <section class="card tasks">
-        <h3 data-speak="小挑战。完成小任务，会有提示音，还有中文表扬。">🎯 小挑战</h3>
+        <div class="card-head">
+          <h3 data-speak="小挑战。完成小任务，会有提示音，还有中文表扬。">🎯 小挑战</h3>
+          <button class="btn ghost tiny" id="btnHospital" type="button">🏥 电路医院</button>
+        </div>
         <div class="task-list" id="taskList"></div>
+      </section>
+
+      <section class="card log">
+        <div class="card-head">
+          <h3 data-speak="实验记录。把通电时的电流和电压记下来，像科学家一样做实验。">📝 实验记录</h3>
+          <button class="btn ghost tiny" id="btnLogRecord" type="button">记下读数</button>
+        </div>
+        <div class="log-list" id="logList"></div>
+        <button class="log-clear" id="btnLogClear" type="button" hidden>清空记录</button>
       </section>
 
       <section class="card inspect" id="inspectCard">
@@ -115,11 +144,11 @@
 </div>
 <div class="toast-root" id="toastRoot" aria-live="polite"></div>
 
-<script src="assets/voice.js?v=8.26"></script>
-<script src="assets/sim.js?v=8.26"></script>
-<script src="assets/parts.js?v=8.26"></script>
-<script src="assets/ui.js?v=8.26"></script>
-<script src="assets/interact.js?v=8.26"></script>
-<script src="assets/app.js?v=8.26"></script>
+<script src="assets/voice.js?v=8.30"></script>
+<script src="assets/sim.js?v=8.30"></script>
+<script src="assets/parts.js?v=8.30"></script>
+<script src="assets/ui.js?v=8.30"></script>
+<script src="assets/interact.js?v=8.30"></script>
+<script src="assets/app.js?v=8.30"></script>
 </body>
 </html>

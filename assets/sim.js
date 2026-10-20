@@ -6,11 +6,13 @@
   'use strict';
 
   var WIRE_R = 0.05;      // 每根电线的电阻
-  var SHORT_A = 2.0;      // 超过这个电流就算短路
+  var SHORT_A = 2.0;      // 超过这个电流算「大电流」，只用于视觉警报
+  var SHORT_MIN_A = 0.5;  /* 拓扑上确实抄了近路，而且真的有大电流，才算短路 */
+  var CONDUCTOR_R = 0.2;  // 开关 / 保险丝 / 电流表 / 面包板这类「导线级」内阻
   var LEAK_G = 1e-9;      // 防止孤岛矩阵奇异
 
   /* 哪些零件算「用电器」：只要有一路电流正经流过用电器，就不算短路 */
-  var LOAD_TYPES = { resistor: 1, lamp: 1, led: 1, buzzer: 1, motor: 1 };
+  var LOAD_TYPES = { resistor: 1, ldr: 1, pot: 1, lamp: 1, led: 1, buzzer: 1, motor: 1 };
   var LEAST_LOAD_A = 0.0005;
 
   function tkey(partId, termId) { return partId + '::' + termId; }
@@ -188,11 +190,87 @@
     }
   }
 
+  /* 从电池正极沿着「导线级」零件走到负极，看有没有绕开所有用电器。
+     能把电池短路的只有：电线、合上的开关/按钮、保险丝、电流表、面包板电源轨，
+     以及另一节电池的内部支路（两节电池首尾相接也会有大电流）。
+     电阻、灯泡、LED、电机、喇叭、可变电阻、二极管、电压表都不算导线。 */
+  function conductorShort(N, batteryEdges, parts, wires, node, tkey, partModel, loadOf) {
+    var adj = new Array(N);
+    for (var i = 0; i < N; i++) adj[i] = [];
+    function link(a, b, meta) {
+      if (a === b || a == null || b == null) return;
+      adj[a].push({ to: b, meta: meta });
+      adj[b].push({ to: a, meta: meta });
+    }
+
+    wires.forEach(function (w) {
+      link(node(tkey(w.a.part, w.a.term)), node(tkey(w.b.part, w.b.term)), { wireId: w.id });
+    });
+    var sourceParts = {};
+    parts.forEach(function (p) {
+      (partModel(p) || []).forEach(function (e) {
+        if (e.kind === 'source') {
+          sourceParts[p.id] = 1;
+          return;
+        }
+        if (LOAD_TYPES[p.type]) return;
+        if (e.kind !== 'resistor') return;
+        if (!(Number(e.r) <= CONDUCTOR_R)) return;
+        link(node(tkey(p.id, e.a)), node(tkey(p.id, e.b)), { partId: p.id });
+      });
+    });
+    /* 其他电池的内部支路：用于发现「两节电池直接对拼」这种回路 */
+    parts.forEach(function (p) {
+      if (!sourceParts[p.id]) return;
+      (partModel(p) || []).forEach(function (e) {
+        if (e.kind !== 'source') return;
+        link(node(tkey(p.id, e.p)), node(tkey(p.id, e.n)), { partId: p.id, source: true });
+      });
+    });
+
+    for (var bi = 0; bi < batteryEdges.length; bi++) {
+      var bat = batteryEdges[bi];
+      /* 两节同电压电池并联时，拓扑上「连通」但几乎没有电流，不算短路 */
+      if (loadOf && !(Math.abs(loadOf[bat.part.id] || 0) > SHORT_MIN_A)) continue;
+      var start = bat.p, goal = bat.n;
+      var prevNode = new Int32Array(N); prevNode.fill(-1);
+      var prevEdge = new Array(N);
+      var queue = [start], seen = new Uint8Array(N);
+      seen[start] = 1;
+      var found = false, k;
+      for (k = 0; k < queue.length && !found; k++) {
+        var cur = queue[k];
+        var list = adj[cur] || [];
+        for (var j = 0; j < list.length; j++) {
+          var step = list[j];
+          if (step.meta.source && step.meta.partId === bat.part.id) continue;
+          if (seen[step.to]) continue;
+          seen[step.to] = 1;
+          prevNode[step.to] = cur;
+          prevEdge[step.to] = step.meta;
+          if (step.to === goal) { found = true; break; }
+          queue.push(step.to);
+        }
+      }
+      if (!found) continue;
+      var wireIds = [], partIds = [];
+      var walk = goal;
+      while (walk !== start && prevNode[walk] >= 0) {
+        var meta = prevEdge[walk];
+        if (meta.wireId && wireIds.indexOf(meta.wireId) < 0) wireIds.push(meta.wireId);
+        if (meta.partId && partIds.indexOf(meta.partId) < 0) partIds.push(meta.partId);
+        walk = prevNode[walk];
+      }
+      return { batteryId: bat.part.id, wireIds: wireIds, partIds: partIds };
+    }
+    return null;
+  }
+
   function buildResult(x, N, parts, wires, batteries, defOf, node, tkey, diodeOn, diodeKeys, burnt, partModel) {
     burnt = burnt || {};
     var res = {
       terminalV: new Map(), parts: {}, wires: {}, batteries: [],
-      totalCurrent: 0, short: false, maxWire: null, diodeState: {},
+      totalCurrent: 0, short: false, shortInfo: null, maxWire: null, diodeState: {},
       maxLoadCurrent: 0
     };
     for (var i = 0; i < N; i++) {
@@ -247,9 +325,9 @@
       var I = a === c ? 0 : (x[a] - x[c]) / WIRE_R;
       res.wires[w.id] = { current: I };
       if (Math.abs(I) > maxAbs) { maxAbs = Math.abs(I); res.maxWire = { id: w.id, current: I }; }
-      if (Math.abs(I) > SHORT_A) res.short = true;
     });
 
+    var loadOf = {};
     batteries.forEach(function (bat, k) {
       var iBranch = x[N + k];       // 电池内部 p→n 的电流（充电为正）
       var load = -iBranch;          // 对外输出电流
@@ -259,12 +337,22 @@
         power: Math.abs(load * (x[bat.p] - x[bat.n]))
       };
       res.batteries.push(rec);
+      loadOf[bat.part.id] = load;
       if (load > 0) res.totalCurrent += load;
-      if (load > SHORT_A) res.short = true;
     });
 
-    /* 「没有用电器」的短路：电流只走电线、开关、二极管、面包板，
-       哪怕电流没到 2A，也是抄近路（例如二极管直接接电池）。 */
+    /* 真正的短路要同时满足两件事：
+       1. 从电池正极到负极存在一条完全由导线级零件组成的路；
+       2. 这条路真的在拉大电流。
+       只看电流大小会把「1Ω 电阻接到 3V 电池」也误判成短路，
+       其实那是电阻过载、会发烫烧坏，不是爆炸。 */
+    var topo = conductorShort(N, batteries, parts, wires, node, tkey, partModel, loadOf);
+    if (topo) {
+      topo.kind = 'conductor';
+      res.short = true;
+      res.shortInfo = topo;
+    }
+
     parts.forEach(function (p) {
       if (!LOAD_TYPES[p.type]) return;
       var inf = res.parts[p.id];
@@ -272,16 +360,34 @@
       var a = Math.abs(inf.current);
       if (a > LEAST_LOAD_A && a > res.maxLoadCurrent) res.maxLoadCurrent = a;
     });
-    if (res.maxLoadCurrent < LEAST_LOAD_A && res.totalCurrent > 0.5) res.short = true;
+    /* 「没有用电器」的短路：电流只走电线、开关、二极管、面包板。
+       二极管不是导线，但直接接在电池两头同样会拉大电流。 */
+    if (!res.short && res.maxLoadCurrent < LEAST_LOAD_A && res.totalCurrent > 0.5) {
+      res.short = true;
+      res.shortInfo = {
+        kind: 'noload',
+        batteryId: res.batteries.length ? res.batteries[0].partId : null,
+        wireIds: [],
+        partIds: parts.filter(function (p) {
+          var inf = res.parts[p.id];
+          return !LOAD_TYPES[p.type] && inf && Math.abs(inf.current) > 0.5;
+        }).map(function (p) { return p.id; })
+      };
+    }
 
     diodeKeys.forEach(function (dk) { res.diodeState[dk] = diodeOn[dk]; });
     res.nodeCount = N;
     return res;
   }
 
-  global.CircuitSim = {
+  var api = {
     simulate: simulate,
     WIRE_R: WIRE_R,
-    SHORT_A: SHORT_A
+    SHORT_A: SHORT_A,
+    SHORT_MIN_A: SHORT_MIN_A,
+    LOAD_TYPES: LOAD_TYPES,
+    LEAST_LOAD_A: LEAST_LOAD_A
   };
-})(window);
+  global.CircuitSim = api;
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+})(typeof window !== 'undefined' ? window : globalThis);
