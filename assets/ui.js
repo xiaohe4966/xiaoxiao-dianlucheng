@@ -106,6 +106,8 @@
     el.btnWireLabels = $('btnWireLabels');
     el.btnSound = $('btnSound');
     el.btnVoice = $('btnVoice');
+    el.btnVoiceSlow = $('btnVoiceSlow');
+    el.btnVoiceAgain = $('btnVoiceAgain');
     el.voiceText = $('voiceText');
     el.btnHearProblem = $('btnHearProblem');
     el.btnListenDoctor = $('btnListenDoctor');
@@ -156,6 +158,21 @@
       }
     });
     on(el.btnHearProblem, 'click', function () { ensureVoice(); speakProblem(true); });
+    on(el.btnVoiceSlow, 'click', function () {
+      if (!global.Voice || !Voice.supported()) return;
+      ensureVoice();
+      var next = !Voice.state.slow;
+      Voice.setSlow(next);
+      updateVoiceSlow();
+      UI.toast(next ? '朗读变慢啦 🐢' : '朗读恢复正常速度');
+      Voice.speak(next ? '好的，我念慢一点。' : '恢复正常速度啦。');
+    });
+    on(el.btnVoiceAgain, 'click', function () {
+      if (!global.Voice || !Voice.supported()) return;
+      ensureVoice();
+      if (!Voice.state.lastText) { UI.toast('我还没有念过话呢，先点一个零件吧'); return; }
+      Voice.repeat();
+    });
     on(el.btnListenDoctor, 'click', function () {
       ensureVoice();
       speak(el.doctorBubble.getAttribute('data-speak') || el.doctorBubble.textContent || '');
@@ -2382,6 +2399,16 @@
       ? (on ? '中文朗读已打开，点一下关闭' : '中文朗读已关闭，点一下打开')
       : '这个浏览器不支持语音朗读';
     if (!supported) el.btnVoice.disabled = true;
+    updateVoiceSlow();
+  }
+  function updateVoiceSlow() {
+    if (!el.btnVoiceSlow) return;
+    var slow = !!(global.Voice && Voice.state.slow);
+    el.btnVoiceSlow.classList.toggle('active', slow);
+    el.btnVoiceSlow.setAttribute('aria-pressed', slow ? 'true' : 'false');
+    el.btnVoiceSlow.title = slow
+      ? '现在是慢速朗读，点一下恢复正常速度'
+      : '朗读慢一点，适合刚学话的小朋友';
   }
   function updateWireStyle() {
     if (!el.btnWireStyle) return;

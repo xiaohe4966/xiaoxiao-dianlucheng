@@ -63,6 +63,8 @@ button{font:inherit}
 [data-speak]:hover{filter:brightness(.97)}
 .voice-btn.off{background:#f1ece0;color:#8b95a7;box-shadow:none}
 .voice-btn.off span{filter:grayscale(1)}
+/* 顶栏这些小开关（慢速朗读等）按下时的样子 */
+.btn.ghost.active{background:#def7ee;border-color:#0f766e;color:#0f766e;box-shadow:0 3px 0 rgba(15,118,110,.28)}
 
 /* ---------- 三栏布局 ---------- */
 .workspace{

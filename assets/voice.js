@@ -5,6 +5,7 @@
   'use strict';
 
   var KEY = 'xiaoxiao-dianlucheng-voice';
+  var KEY_SLOW = 'xiaoxiao-dianlucheng-voice-slow';
   var synth = global.speechSynthesis || null;
 
   var state = {
@@ -14,6 +15,7 @@
     voices: [],
     voice: null,
     speaking: false,
+    slow: false,
     lastText: '',
     lastAt: 0
   };
@@ -38,11 +40,17 @@
     try {
       var v = localStorage.getItem(KEY);
       if (v === 'off') state.enabled = false;
+      var s = localStorage.getItem(KEY_SLOW);
+      if (s === 'on') state.slow = true;
     } catch (e) {}
   }
   function savePref() {
     try { localStorage.setItem(KEY, state.enabled ? 'on' : 'off'); } catch (e) {}
+    try { localStorage.setItem(KEY_SLOW, state.slow ? 'on' : 'off'); } catch (e) {}
   }
+
+  /* 慢速朗读：给刚学话的小朋友再慢一点 */
+  function baseRate() { return state.slow ? 0.78 : 0.98; }
 
   /* 判断是不是中文声音。注意别用「Lan」这种短词去匹配，会把 Lana 之类的外语声音也拉进来 */
   function isZhVoice(v) {
@@ -238,7 +246,7 @@
     var u = new global.SpeechSynthesisUtterance(chunk);
     u.lang = (useVoice && useVoice.lang) || 'zh-CN';
     if (useVoice) u.voice = useVoice;
-    u.rate = opts.rate || 0.98;
+    u.rate = opts.rate || baseRate();
     u.pitch = opts.pitch || 1.05;
     u.volume = 1;
     active = { token: my, i: i, attempt: n, started: false, u: u };
@@ -253,7 +261,7 @@
       state.speaking = true;
       clearTimers();
       /* 一直收不到 end 时的兜底：按字数估上限，别把后面的句子卡死 */
-      var est = Math.max(4500, chunk.length * 240 + 3500);
+      var est = Math.max(4500, chunk.length * 240 * (0.98 / (u.rate || 0.98)) + 3500);
       endTimer = setTimeout(function () {
         if (!current()) return;
         advance(my, i);
@@ -334,6 +342,18 @@
     emit();
   }
 
+  function setSlow(on) {
+    state.slow = !!on;
+    savePref();
+    emit();
+  }
+
+  /* 再念一遍：不用打字，把刚才最后那段话重新念出来 */
+  function repeat() {
+    if (!state.enabled || !supported() || !state.lastText) return false;
+    return speak(state.lastText, { force: true });
+  }
+
   function isEnabled() { return state.enabled && supported(); }
 
   function toggle() {
@@ -401,6 +421,8 @@
     setEnabled: setEnabled,
     isEnabled: isEnabled,
     toggle: toggle,
+    setSlow: setSlow,
+    repeat: repeat,
     onChange: function (fn) { if (typeof fn === 'function') listeners.push(fn); }
   };
 })(window);
