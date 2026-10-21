@@ -105,6 +105,7 @@
     el.btnWireStyle = $('btnWireStyle');
     el.btnWireLabels = $('btnWireLabels');
     el.btnSymbol = $('btnSymbol');
+    el.btnStars = $('btnStars');
     el.btnSound = $('btnSound');
     el.btnVoice = $('btnVoice');
     el.btnVoiceSlow = $('btnVoiceSlow');
@@ -146,6 +147,7 @@
     on(el.btnSymbol, 'click', function () {
       App.setSymbolMode(!App.state.symbolMode);
     });
+    on(el.btnStars, 'click', showStars);
     on(el.btnSound, 'click', function () {
       App.audio.setEnabled(!App.state.sound);
       try { localStorage.setItem('xiaoxiao-dianlucheng-sound', App.state.sound ? 'on' : 'off'); } catch (e) {}
@@ -2693,6 +2695,44 @@
     var hr = $('helpRestore');
     if (hr) on(hr, 'click', function () { closeModal(); App.restoreBackup(); });
   }
+  /* ---------- 闯关星星：数一数 12 个任务拿到了几颗 ---------- */
+  function showStars() {
+    var st = App.state;
+    var total = App.TASKS.length;
+    var got = st.achieved.length;
+    var all = got >= total;
+    var rows = App.TASKS.map(function (t) {
+      var done = st.achieved.indexOf(t.id) >= 0;
+      var say = done
+        ? '任务「' + t.label + '」你已经完成啦，拿到了一颗星星。'
+        : '任务「' + t.label + '」还没有完成。提示：' + t.hint;
+      return '<div class="star-row ' + (done ? 'done' : 'todo') + '"' +
+        ' data-speak="' + say + '">' +
+        '<span class="star-ico">' + (done ? '⭐' : '☆') + '</span>' +
+        '<span class="star-lab">' + t.icon + ' ' + t.label + '</span>' +
+        '<span class="star-hint">' + (done ? '点亮啦！' : t.hint) + '</span>' +
+        '</div>';
+    }).join('');
+    var bar = '<div class="star-bar"><i style="width:' + Math.round(got / total * 100) + '%"></i></div>';
+    var head = all
+      ? '<h2>🌟 通关啦！你拿到了全部 ' + total + ' 颗星星！</h2>' +
+        '<p class="sub">小小的电路世界再也难不倒你了，快去搭一个自己的发明吧！</p>'
+      : '<h2>🌟 闯关星星</h2>' +
+        '<p class="sub">你已经拿到 <b class="star-count">' + got + '</b> / ' + total +
+        ' 颗星星！点亮下面的任务，星星就会到你的口袋里。点每一行可以听提示。</p>';
+    openModal(
+      '<div class="stars-box">' + head + bar +
+      '<div class="star-list">' + rows + '</div></div>',
+      all
+        ? '太厉害啦！十二个任务全部完成，' + total + ' 颗星星都到手了，你是小小电路大师！'
+        : '闯关星星。你拿到了 ' + got + ' 颗，一共 ' + total + ' 颗。点亮下面这些任务，就能把星星带回家。'
+    );
+    /* 点每一行星星，都能听到任务提示（和「怎么玩」一样） */
+    Array.prototype.forEach.call(el.modalCard.querySelectorAll('.star-row'), function (n) {
+      on(n, 'click', function () { speak(n.getAttribute('data-speak') || ''); });
+    });
+  }
+
   function showExamples() {
     openModal(
       '<h2>示例电路</h2><p class="sub">点一个看看它是怎么工作的（加载后可以按「撤销」恢复）</p>' +
@@ -2739,6 +2779,7 @@
     updateSound: updateSound, updateVoice: updateVoice, updateUndo: updateUndo,
     updateWireStyle: updateWireStyle, updateWireLabels: updateWireLabels,
     updateSymbolMode: updateSymbolMode,
+    showStars: showStars,
     renderGuide: renderGuide, renderLog: renderLog, showHospital: showHospital, confirm: confirm,
     applyZoom: applyZoom, fitToContent: fitToContent, contentBounds: contentBounds,
     setZoom: setZoom, playBoom: playBoom,

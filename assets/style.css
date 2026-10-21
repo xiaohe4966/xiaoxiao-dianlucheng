@@ -562,11 +562,22 @@ button{font:inherit}
 .example span{font-size:13.5px;color:var(--muted);font-weight:600}
 .example.danger{border-color:#f5b5b5;background:#fff7f7}
 .help-list{display:flex;flex-direction:column;gap:11px}
-.help-item{display:flex;gap:11px;align-items:flex-start;background:#fff;border:2px solid #efe4d1;border-radius:16px;padding:11px 13px}
-.help-item .n{flex:0 0 auto;width:30px;height:30px;border-radius:50%;background:var(--yellow);border:2.5px solid var(--ink);
+.help-item{display:flex;gap:11px;align-items:flex-start;background:#fff;border:2px solid #efe4d1;border-radius:16px;padding:11px 13px}.help-item .n{flex:0 0 auto;width:30px;height:30px;border-radius:50%;background:var(--yellow);border:2.5px solid var(--ink);
   display:grid;place-items:center;font-weight:900}
 .help-item p{margin:0;font-size:14.5px;font-weight:600;color:#4b5871;line-height:1.65}
 .help-item b{color:var(--ink)}
+/* ---------- 闯关星星 ---------- */
+.stars-box{max-height:70vh;overflow:auto;padding-right:2px}
+.star-bar{height:14px;border-radius:8px;background:#f1e8d8;border:2px solid #e7dcc7;overflow:hidden;margin:10px 0 14px}
+.star-bar i{display:block;height:100%;width:0;border-radius:8px;background:linear-gradient(90deg,#fbbf24,#f59e0b);transition:width .4s}
+.star-list{display:flex;flex-direction:column;gap:9px}
+.star-row{display:flex;gap:10px;align-items:baseline;background:#fff;border:2px solid #efe4d1;border-radius:15px;padding:10px 13px}
+.star-row.done{border-color:#fcd34d;background:#fffbeb}
+.star-row .star-ico{font-size:19px}
+.star-row .star-lab{font-size:14.5px;font-weight:800;color:var(--ink)}
+.star-row .star-hint{font-size:12.5px;color:var(--muted);font-weight:600;line-height:1.5}
+.star-row.done .star-hint{color:#b45309;background:#fef3c7;border-radius:8px;padding:2px 8px}
+.star-count{color:#b45309;font-size:17px}
 .case-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
 .case-card{text-align:left;border:2.5px solid #e7dcc7;border-radius:18px;background:#fff;padding:13px;
   cursor:pointer;transition:.15s;display:flex;flex-direction:column;gap:6px;
