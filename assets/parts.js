@@ -153,8 +153,10 @@
           '<line x1="120" y1="68" x2="140" y2="68" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
           '<rect x="30" y="50" width="90" height="36" rx="9" fill="#f3e3b8" stroke="#1f2a3a" stroke-width="3"/>' +
           '<path d="M40 68 q6 -10 12 0 q6 10 12 0 q6 -10 12 0 q6 10 12 0 q6 -10 12 0 q6 10 12 0" fill="none" stroke="#b45309" stroke-width="3" stroke-linecap="round"/>' +
-          /* 太阳的亮度由 --lg（0～100）驱动，自动感光时不用重建整个零件 */
-          '<g class="ldr-sun" style="--lg:' + light.toFixed(1) + '">' +
+          /* 太阳的亮度由 --lg（0～100）驱动，自动感光时不用重建整个零件；
+             亮度直接写成内联 opacity——Safari 对 SVG 里「transition + calc(var)」
+             的组合会算错，所以要绕过这条坑 */
+          '<g class="ldr-sun" style="--lg:' + light.toFixed(1) + ';opacity:' + (0.2 + light * 0.007).toFixed(3) + '">' +
           '<circle cx="47" cy="33" r="7" fill="#ffd166"/>' +
           '<line x1="47" y1="19" x2="47" y2="12" stroke="#f59e0b" stroke-width="3" stroke-linecap="round"/>' +
           '<line x1="33" y1="33" x2="26" y2="33" stroke="#f59e0b" stroke-width="3" stroke-linecap="round"/>' +
@@ -569,6 +571,195 @@
     if (!s) return '';
     return typeof s.text === 'function' ? s.text(part) : (s.text || '');
   }
+
+  /* ---------- 电路符号视图（IEC 课本符号） ----------
+     点顶栏「⚡ 符号」把零件换成电学课本里的标准符号，接线点位置不变。
+     符号图复用原外观的 class 钩子（.glow/.rays/.motor-rotor/.wave/.
+     buzz-body/.cap-fill/.ldr-sun/.meter-read 等），
+     通电发光、充电条、自动感光、电表读数照样会动。 */
+  var SYMBOL_INK = '#22314a';
+  var SYMBOLS = {
+    battery: function () {
+      return svg(150, 94,
+        '<text x="75" y="16" text-anchor="middle" font-size="12" font-weight="800" fill="#6b7280">电池</text>' +
+        '<line x1="14" y1="54" x2="58" y2="54" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<line x1="136" y1="54" x2="94" y2="54" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<line x1="70" y1="34" x2="70" y2="74" stroke="' + SYMBOL_INK + '" stroke-width="3"/>' +
+        '<line x1="58" y1="44" x2="58" y2="64" stroke="' + SYMBOL_INK + '" stroke-width="7"/>' +
+        '<line x1="94" y1="34" x2="94" y2="74" stroke="' + SYMBOL_INK + '" stroke-width="3"/>' +
+        '<line x1="84" y1="44" x2="84" y2="64" stroke="' + SYMBOL_INK + '" stroke-width="7"/>');
+    },
+    switch: function (p) {
+      var closed = !!(p && p.props && p.props.closed);
+      return svg(140, 86,
+        '<text x="70" y="16" text-anchor="middle" font-size="12" font-weight="800" fill="#6b7280">开关</text>' +
+        '<line x1="14" y1="58" x2="46" y2="58" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<line x1="126" y1="58" x2="94" y2="58" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<circle cx="46" cy="58" r="4.2" fill="#fff" stroke="' + SYMBOL_INK + '" stroke-width="2.6"/>' +
+        '<circle cx="94" cy="58" r="4.2" fill="#fff" stroke="' + SYMBOL_INK + '" stroke-width="2.6"/>' +
+        (closed
+          ? '<line x1="50" y1="58" x2="90" y2="58" stroke="' + SYMBOL_INK + '" stroke-width="3" stroke-linecap="round"/>'
+          : '<line x1="50" y1="58" x2="88" y2="30" stroke="' + SYMBOL_INK + '" stroke-width="3" stroke-linecap="round"/>'));
+    },
+    button: function (p) {
+      var pressed = !!(p && p.props && p.props.pressed);
+      return svg(140, 94,
+        '<text x="70" y="16" text-anchor="middle" font-size="12" font-weight="800" fill="#6b7280">按钮</text>' +
+        '<line x1="14" y1="62" x2="48" y2="62" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<line x1="126" y1="62" x2="92" y2="62" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<circle cx="48" cy="62" r="4.2" fill="#fff" stroke="' + SYMBOL_INK + '" stroke-width="2.6"/>' +
+        '<circle cx="92" cy="62" r="4.2" fill="#fff" stroke="' + SYMBOL_INK + '" stroke-width="2.6"/>' +
+        (pressed
+          ? '<line x1="48" y1="57" x2="92" y2="57" stroke="' + SYMBOL_INK + '" stroke-width="3.4" stroke-linecap="round"/>'
+          : '<line x1="48" y1="46" x2="92" y2="46" stroke="' + SYMBOL_INK + '" stroke-width="3.4" stroke-linecap="round"/>' +
+            '<line x1="70" y1="46" x2="70" y2="28" stroke="' + SYMBOL_INK + '" stroke-width="3" stroke-dasharray="4 3.5"/>' +
+            '<line x1="56" y1="28" x2="84" y2="28" stroke="' + SYMBOL_INK + '" stroke-width="3.4" stroke-linecap="round"/>'));
+    },
+    resistor: function () {
+      return svg(150, 58,
+        '<text x="75" y="13" text-anchor="middle" font-size="11.5" font-weight="800" fill="#6b7280">电阻</text>' +
+        '<line x1="10" y1="30" x2="48" y2="30" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<line x1="140" y1="30" x2="102" y2="30" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<rect x="48" y="18" width="54" height="24" fill="#fff" stroke="' + SYMBOL_INK + '" stroke-width="2.8"/>');
+    },
+    ldr: function (p) {
+      var light = (typeof p.light === 'number' && isFinite(p.light)) ? p.light : Number(p.props.light);
+      if (!isFinite(light)) light = 50;
+      light = Math.max(0, Math.min(100, light));
+      var r = 200000 * Math.pow(800 / 200000, light / 100);
+      return svg(150, 124,
+        '<text x="75" y="14" text-anchor="middle" font-size="11.5" font-weight="800" fill="#6b7280">光敏电阻</text>' +
+        '<line x1="10" y1="68" x2="50" y2="68" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<line x1="140" y1="68" x2="100" y2="68" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<circle cx="75" cy="68" r="28" fill="#fff" stroke="' + SYMBOL_INK + '" stroke-width="2.8"/>' +
+        '<rect x="60" y="56" width="30" height="24" fill="none" stroke="' + SYMBOL_INK + '" stroke-width="2.6"/>' +
+        /* 两根“光”箭头：亮度直接写成内联 opacity（--lg 留作切回实物时的初值；
+           Safari 对 SVG 里 transition + calc(var) 的组合算不对，所以这里不用它） */
+        '<g class="ldr-sun" style="--lg:' + light.toFixed(1) + ';opacity:' + (0.2 + light * 0.007).toFixed(3) + '" stroke="' + SYMBOL_INK + '" stroke-width="2.6" stroke-linecap="round">' +
+        '<line x1="33" y1="28" x2="50" y2="45"/><line x1="50" y1="45" x2="42" y2="45"/><line x1="50" y1="45" x2="50" y2="37"/>' +
+        '<line x1="55" y1="16" x2="70" y2="31"/><line x1="70" y1="31" x2="62" y2="31"/><line x1="70" y1="31" x2="70" y2="23"/></g>' +
+        '<text class="ldr-light-read" x="75" y="107" text-anchor="middle" font-size="11" font-weight="800" fill="#8a7857">☀ 光照 ' + Math.round(light) + '%</text>' +
+        '<text class="ldr-r-read" x="75" y="121" text-anchor="middle" font-size="11.5" font-weight="900" fill="#7a6a52">电阻约 ' + fmtR(Math.round(r)) + '</text>');
+    },
+    pot: function () {
+      return svg(150, 104,
+        '<text x="75" y="16" text-anchor="middle" font-size="11.5" font-weight="800" fill="#6b7280">可变电阻</text>' +
+        '<line x1="10" y1="66" x2="48" y2="66" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<line x1="140" y1="66" x2="102" y2="66" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<rect x="48" y="54" width="54" height="24" fill="#fff" stroke="' + SYMBOL_INK + '" stroke-width="2.8"/>' +
+        '<line x1="75" y1="28" x2="75" y2="54" stroke="' + SYMBOL_INK + '" stroke-width="2.8"/>' +
+        '<line x1="75" y1="54" x2="68" y2="45" stroke="' + SYMBOL_INK + '" stroke-width="2.8" stroke-linecap="round"/>' +
+        '<line x1="75" y1="54" x2="82" y2="45" stroke="' + SYMBOL_INK + '" stroke-width="2.8" stroke-linecap="round"/>');
+    },
+    cap: function (p) {
+      var uF = Number(p && p.props && p.props.uF);
+      if (!isFinite(uF) || uF < 10) uF = 4700;
+      return svg(150, 104,
+        '<text x="75" y="16" text-anchor="middle" font-size="11.5" font-weight="800" fill="#6b7280">电容 ' + uF + 'µF</text>' +
+        '<line x1="10" y1="66" x2="62" y2="66" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<line x1="140" y1="66" x2="84" y2="66" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<line x1="66" y1="42" x2="66" y2="90" stroke="' + SYMBOL_INK + '" stroke-width="4"/>' +
+        '<line x1="80" y1="42" x2="80" y2="90" stroke="' + SYMBOL_INK + '" stroke-width="4"/>' +
+        /* 存电量条（--charge 由仿真驱动，跟真实外观同一个钩子） */
+        '<rect class="cap-fill" x="58" y="94" width="30" height="7" rx="3.5" fill="#38bdf8"/>');
+    },
+    led: function (p) {
+      var color = (p && p.props && p.props.color) || '#ff5d5d';
+      return svg(132, 136,
+        '<text x="66" y="22" text-anchor="middle" font-size="11.5" font-weight="800" fill="#6b7280">LED</text>' +
+        '<circle class="glow" cx="56" cy="104" r="30" style="fill:' + color + '" opacity="0"/>' +
+        '<line x1="16" y1="112" x2="32" y2="112" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<line x1="116" y1="112" x2="100" y2="112" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<path d="M34 95 L34 129 L74 112 Z" fill="#fff" stroke="' + SYMBOL_INK + '" stroke-width="3" stroke-linejoin="round"/>' +
+        '<line x1="78" y1="95" x2="78" y2="129" stroke="' + SYMBOL_INK + '" stroke-width="3.6"/>' +
+        /* 发光的两根箭头：通电时借 .rays 的呼吸动画亮起来 */
+        '<g class="rays" opacity="0" stroke="' + color + '" stroke-width="3" stroke-linecap="round">' +
+        '<line x1="60" y1="92" x2="82" y2="76"/>' +
+        '<path d="M82 76 L72 78 L77 84 Z" fill="' + color + '" stroke="none"/>' +
+        '<line x1="82" y1="104" x2="104" y2="88"/>' +
+        '<path d="M104 88 L94 90 L99 96 Z" fill="' + color + '" stroke="none"/></g>' +
+        '<text x="5" y="133" font-size="12" font-weight="800" fill="#dc2626">+</text>');
+    },
+    lamp: function () {
+      return svg(140, 126,
+        '<text x="70" y="16" text-anchor="middle" font-size="11.5" font-weight="800" fill="#6b7280">灯泡</text>' +
+        '<circle class="glow" cx="70" cy="66" r="36" fill="#ffd166" opacity="0"/>' +
+        '<path d="M16 108 V66 H44" fill="none" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<path d="M124 108 V66 H96" fill="none" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<circle class="lamp-glass" cx="70" cy="66" r="26" fill="#fff" stroke="' + SYMBOL_INK + '" stroke-width="3"/>' +
+        '<line x1="52" y1="48" x2="88" y2="84" stroke="' + SYMBOL_INK + '" stroke-width="3" stroke-linecap="round"/>' +
+        '<line x1="88" y1="48" x2="52" y2="84" stroke="' + SYMBOL_INK + '" stroke-width="3" stroke-linecap="round"/>');
+    },
+    buzzer: function () {
+      return svg(140, 112,
+        '<text x="70" y="16" text-anchor="middle" font-size="11.5" font-weight="800" fill="#6b7280">喇叭</text>' +
+        '<path class="wave" opacity="0" d="M102 76 q10 16 0 32" fill="none" stroke="#38bdf8" stroke-width="4" stroke-linecap="round"/>' +
+        '<path class="wave w2" opacity="0" d="M114 66 q16 24 0 48" fill="none" stroke="#0ea5e9" stroke-width="4" stroke-linecap="round"/>' +
+        '<line x1="14" y1="92" x2="50" y2="92" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<line x1="126" y1="92" x2="84" y2="92" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<g class="buzz-body">' +
+        '<rect x="50" y="78" width="8" height="28" fill="' + SYMBOL_INK + '"/>' +
+        '<path d="M60 84 L86 72 L86 110 L60 98 Z" fill="#fff" stroke="' + SYMBOL_INK + '" stroke-width="3" stroke-linejoin="round"/></g>');
+    },
+    diode: function () {
+      return svg(134, 74,
+        '<text x="67" y="16" text-anchor="middle" font-size="11.5" font-weight="800" fill="#6b7280">二极管</text>' +
+        '<line x1="12" y1="42" x2="36" y2="42" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<line x1="122" y1="42" x2="94" y2="42" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<path d="M38 26 L38 58 L88 42 Z" fill="#fff" stroke="' + SYMBOL_INK + '" stroke-width="3" stroke-linejoin="round"/>' +
+        '<line x1="88" y1="26" x2="88" y2="58" stroke="' + SYMBOL_INK + '" stroke-width="3.6"/>');
+    },
+    fuse: function () {
+      return svg(150, 76,
+        '<text x="75" y="16" text-anchor="middle" font-size="11.5" font-weight="800" fill="#6b7280">保险丝</text>' +
+        '<line x1="10" y1="42" x2="50" y2="42" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<line x1="140" y1="42" x2="100" y2="42" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<rect x="50" y="28" width="50" height="28" fill="#fff" stroke="' + SYMBOL_INK + '" stroke-width="3"/>' +
+        '<line x1="50" y1="42" x2="100" y2="42" stroke="' + SYMBOL_INK + '" stroke-width="2.6"/>');
+    },
+    motor: function () {
+      return svg(150, 124,
+        '<text x="75" y="16" text-anchor="middle" font-size="11.5" font-weight="800" fill="#6b7280">电机</text>' +
+        '<circle class="glow" cx="75" cy="66" r="36" fill="#93c5fd" opacity="0"/>' +
+        '<path d="M14 106 V66 H47" fill="none" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<path d="M136 106 V66 H103" fill="none" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<circle cx="75" cy="66" r="28" fill="#fff" stroke="' + SYMBOL_INK + '" stroke-width="3"/>' +
+        '<text x="75" y="75" text-anchor="middle" font-size="21" font-weight="900" fill="' + SYMBOL_INK + '">M</text>');
+    },
+    ammeter: function () {
+      return svg(132, 142,
+        '<text x="66" y="18" text-anchor="middle" font-size="11.5" font-weight="800" fill="#6b7280">电流表</text>' +
+        '<path d="M46 100 H20 V120" fill="none" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<path d="M86 100 H112 V120" fill="none" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<circle cx="66" cy="66" r="34" fill="#fff" stroke="' + SYMBOL_INK + '" stroke-width="3"/>' +
+        '<text x="66" y="60" text-anchor="middle" font-size="16" font-weight="900" fill="#0f766e">A</text>' +
+        '<text class="meter-read" x="66" y="86" text-anchor="middle" font-size="14" font-weight="900" fill="#22314a">0 mA</text>');
+    },
+    voltmeter: function () {
+      return svg(132, 142,
+        '<text x="66" y="18" text-anchor="middle" font-size="11.5" font-weight="800" fill="#6b7280">电压表</text>' +
+        '<path d="M46 100 H20 V120" fill="none" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<path d="M86 100 H112 V120" fill="none" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
+        '<circle cx="66" cy="66" r="34" fill="#fff" stroke="' + SYMBOL_INK + '" stroke-width="3"/>' +
+        '<text x="66" y="60" text-anchor="middle" font-size="16" font-weight="900" fill="#1d4ed8">V</text>' +
+        '<text class="meter-read" x="66" y="86" text-anchor="middle" font-size="14" font-weight="900" fill="#22314a">0.00 V</text>');
+    },
+    breadboard: function () {
+      return svg(500, 172,
+        '<rect x="10" y="10" width="480" height="152" rx="12" fill="#f8fafc" stroke="#94a3b8" stroke-width="2.5"/>' +
+        '<line x1="26" y1="31.7" x2="474" y2="31.7" stroke="#ef4444" stroke-width="4" stroke-linecap="round"/>' +
+        '<line x1="26" y1="147.3" x2="474" y2="147.3" stroke="#3b82f6" stroke-width="4" stroke-linecap="round"/>' +
+        '<text x="22" y="52" font-size="15" font-weight="900" fill="#ef4444">＋</text>' +
+        '<text x="22" y="143" font-size="15" font-weight="900" fill="#3b82f6">－</text>' +
+        '<line x1="150" y1="62" x2="150" y2="117" stroke="#cbd5e1" stroke-width="3"/>' +
+        '<line x1="250" y1="62" x2="250" y2="117" stroke="#cbd5e1" stroke-width="3"/>' +
+        '<line x1="350" y1="62" x2="350" y2="117" stroke="#cbd5e1" stroke-width="3"/>' +
+        '<text x="250" y="92" text-anchor="middle" font-size="14" font-weight="800" fill="#94a3b8">面包板</text>');
+    }
+  };
+  Object.keys(SYMBOLS).forEach(function (k) {
+    if (PARTS[k]) PARTS[k].symbol = SYMBOLS[k];
+  });
 
   var api = {
     PARTS: PARTS,

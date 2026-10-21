@@ -10,6 +10,7 @@
   var SOUND_KEY = 'xiaoxiao-dianlucheng-sound';
   var WIRE_STYLE_KEY = 'xiaoxiao-dianlucheng-wire-style';
   var WIRE_LABELS_KEY = 'xiaoxiao-dianlucheng-wire-labels';
+  var SYMBOL_KEY = 'xiaoxiao-dianlucheng-symbol';
   var MAX_PARTS = 80, MAX_WIRES = 240;
   /* 12 种差别明显的电线颜色：新电线优先挑没用过的，
      如果两根电线靠得近或者交叉，就挑颜色差得最远的，避免看混 */
@@ -32,6 +33,7 @@
     zoom: 1, fitScale: 1, scale: 1,
     sound: true, wireStart: null, shortTimer: null,
     wireStyle: 'curve', wireLabels: false,
+    symbolMode: false,   /* 顶栏「⚡ 符号」：零件画成电学课本里的 IEC 符号 */
     burnt: {}, heat: {}, heatTimer: null, heatAt: 0,
     presetNote: '', firstRun: true,
     log: [], guide: { active: false, step: 0 }, hospital: null,
@@ -633,6 +635,25 @@
         : '电线变回弯弯的曲线啦。想整齐一点，就再点一下横竖线。');
     }
     return style;
+  }
+
+  /* 电路符号视图：把所有零件换成电学课本里的 IEC 符号（再点一下换回实物）
+     状态不进电路存档——单独记一个小键，下次进来还记得。 */
+  function setSymbolMode(on) {
+    var next = !!on;
+    if (state.symbolMode === next) return next;
+    state.symbolMode = next;
+    try { localStorage.setItem(SYMBOL_KEY, next ? 'on' : 'off'); } catch (e) {}
+    UI.renderAll();
+    UI.renderInspector();
+    if (next) {
+      UI.toast('换成电路课本里的符号啦 ⚡（接线点位置不变）', 'good');
+      UI.speak('现在零件都换成电路课本里的符号啦。每个符号的画法是全世界统一的，接线点还在老地方，怎么连都不会变。');
+    } else {
+      UI.toast('换回像真的零件的样子啦');
+      UI.speak('零件换回像真的样子啦。');
+    }
+    return next;
   }
 
   function setWireLabels(on) {
@@ -1610,6 +1631,7 @@
     try { var s = localStorage.getItem(SOUND_KEY); if (s === 'off') state.sound = false; } catch (e) {}
     try { if (localStorage.getItem(WIRE_STYLE_KEY) === 'ortho') state.wireStyle = 'ortho'; } catch (e) {}
     try { if (localStorage.getItem(WIRE_LABELS_KEY) === 'on') state.wireLabels = true; } catch (e) {}
+    try { if (localStorage.getItem(SYMBOL_KEY) === 'on') state.symbolMode = true; } catch (e) {}
     loadLog();
     if (global.Voice) Voice.init();
     UI.init();
@@ -1692,6 +1714,7 @@
     loadPreset: loadPreset, loadCase: loadCase, audio: audio, init: init, setWireStyle: setWireStyle,
     setWireColor: setWireColor, wireColors: WIRE_COLORS,
     setLdrAuto: setLdrAuto,
+    setSymbolMode: setSymbolMode,
     setWireLabels: setWireLabels,
     recordMeasurement: recordMeasurement, clearLog: clearLog,
     dischargeCap: dischargeCap,

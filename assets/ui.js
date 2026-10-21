@@ -104,6 +104,7 @@
     el.btnShare = $('btnShare');
     el.btnWireStyle = $('btnWireStyle');
     el.btnWireLabels = $('btnWireLabels');
+    el.btnSymbol = $('btnSymbol');
     el.btnSound = $('btnSound');
     el.btnVoice = $('btnVoice');
     el.btnVoiceSlow = $('btnVoiceSlow');
@@ -141,6 +142,9 @@
     on(el.btnWireLabels, 'click', function () { App.setWireLabels(!App.state.wireLabels); });
     on(el.btnWireStyle, 'click', function () {
       App.setWireStyle(App.state.wireStyle === 'ortho' ? 'curve' : 'ortho');
+    });
+    on(el.btnSymbol, 'click', function () {
+      App.setSymbolMode(!App.state.symbolMode);
     });
     on(el.btnSound, 'click', function () {
       App.audio.setEnabled(!App.state.sound);
@@ -372,15 +376,20 @@
   }
 
   /* ---------- 渲染零件 ---------- */
-  function partSig(part) { return JSON.stringify(part.props); }
+  function partSig(part) {
+    /* 符号/实物两种皮也要让零件重建：把视图模式拼进签名 */
+    return (App.state.symbolMode ? 'S|' : 'P|') + JSON.stringify(part.props);
+  }
   function partInner(part) {
     var def = PARTS[part.type];
+    /* 符号视图：顶栏「⚡ 符号」打开后画电学课本符号（接线点位置不变） */
+    var useSymbol = !!App.state.symbolMode && typeof def.symbol === 'function';
     var terms = def.terms.map(function (t) {
       return '<button class="terminal' + (t.tone ? ' t-' + t.tone : '') + '" data-part="' + part.id + '" data-term="' + t.id +
         '" title="接线点" aria-label="' + def.name + '的接线点 ' + (t.label || t.id) +
         '，按回车开始连线" style="left:' + t.x + 'px;top:' + t.y + 'px">' + (t.label || '') + '</button>';
     }).join('');
-    return '<div class="part-body"></div>' + def.art(part) + terms +
+    return '<div class="part-body"></div>' + (useSymbol ? def.symbol(part) : def.art(part)) + terms +
       '<button class="part-del" title="删除" tabindex="-1">🗑️</button>' +
       '<span class="part-badge"></span>';
   }
@@ -412,6 +421,7 @@
     if (delBtn) delBtn.tabIndex = selectedId === part.id ? 0 : -1;
     node.classList.toggle('selected', !!(selectedId && selectedId === part.id));
     node.classList.toggle('is-led', part.type === 'led');
+    node.classList.toggle('is-symbol', !!App.state.symbolMode && typeof def.symbol === 'function');
     node.classList.toggle('is-pressed', part.type === 'button' && !!part.props.pressed);
     if (part.type === 'led') {
       node.style.setProperty('--led-color', part.props.color || '#ff5d5d');
@@ -1156,6 +1166,7 @@
   function renderAll() {
     renderParts();
     renderWires();
+    updateSymbolMode();
     el.emptyHint.hidden = App.state.parts.length > 0;
   }
   function select(sel) {
@@ -1215,7 +1226,11 @@
         var ldrLight = (typeof p.light === 'number' && isFinite(p.light)) ? p.light : Number(p.props.light);
         if (!isFinite(ldrLight)) ldrLight = 50;
         var sun = node.querySelector('.ldr-sun');
-        if (sun) sun.style.setProperty('--lg', Math.max(0, Math.min(100, ldrLight)).toFixed(1));
+        if (sun) {
+          sun.style.setProperty('--lg', Math.max(0, Math.min(100, ldrLight)).toFixed(1));
+          /* 亮度直接写内联 opacity，不靠 CSS 的 calc(var)（Safari 会算错） */
+          sun.style.opacity = (0.2 + Math.max(0, Math.min(100, ldrLight)) * 0.007).toFixed(3);
+        }
         var lr2 = Math.round(Number(PARTS.ldr.model(p).r) || 0);
         var lt2 = node.querySelector('.ldr-light-read');
         if (lt2) lt2.textContent = '☀ 光照 ' + Math.round(ldrLight) + '%';
@@ -2526,6 +2541,14 @@
     if (el.btnRedo) el.btnRedo.disabled = !App.state.future || !App.state.future.length;
   }
 
+  /* 顶栏「⚡ 符号」按钮的按下状态 */
+  function updateSymbolMode() {
+    var b = el.btnSymbol;
+    if (!b) return;
+    b.setAttribute('aria-pressed', App.state.symbolMode ? 'true' : 'false');
+    b.classList.toggle('active', !!App.state.symbolMode);
+  }
+
   /* ---------- 缩放 ---------- */
   function setZoom(z) { App.state.zoom = App.clamp(z, 0.6, 3); applyZoom(); }
   function applyZoom() {
@@ -2715,6 +2738,7 @@
     updateRunButton: updateRunButton, setPowered: setPowered, setAlarm: setAlarm,
     updateSound: updateSound, updateVoice: updateVoice, updateUndo: updateUndo,
     updateWireStyle: updateWireStyle, updateWireLabels: updateWireLabels,
+    updateSymbolMode: updateSymbolMode,
     renderGuide: renderGuide, renderLog: renderLog, showHospital: showHospital, confirm: confirm,
     applyZoom: applyZoom, fitToContent: fitToContent, contentBounds: contentBounds,
     setZoom: setZoom, playBoom: playBoom,

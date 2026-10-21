@@ -198,6 +198,9 @@ button{font:inherit}
 /* 自动感光时光照滑块交给程序控制：整体变淡，提示小朋友现在不用拖 */
 .pq-slider.off{opacity:.45}
 .pq-slider.off input[type=range]{cursor:not-allowed}
+/* ---------- 电路符号视图 ---------- */
+/* 存电量条的起点跟着符号画法挪到两块极板下方 */
+.part.is-symbol .cap-fill{transform-origin:58px 94px}
 .pq-side{flex:0 0 auto;font-size:15px;line-height:1}
 .pq-side-txt{font-size:12px;font-weight:900;color:#8a7857}
 .pq-scale{display:flex;justify-content:space-between;padding:0 23px;margin-top:-4px;
@@ -370,8 +373,10 @@ button{font:inherit}
 .junction-dot{fill:#22314a;stroke:var(--paper);stroke-width:2;opacity:.92}
 /* 选中电线后可以换颜色 */
 .color-row{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 2px}
-/* 光敏电阻的太阳亮度：--lg 是光照 0～100，由外观初始值/每拍刷新设置 */
-.part .ldr-sun{opacity:calc(.2 + var(--lg,50) * .007);transition:opacity .3s}
+/* 光敏电阻的太阳亮度：--lg 是光照 0～100（旧规则留着做初始兜底），
+   亮度平时由 JS 直接写内联 opacity；这里的 transition 会把 Safari 的
+   SVG 计算值冻结住，千万别加回来 */
+.part .ldr-sun{opacity:calc(.2 + var(--lg,50) * .007)}
 /* 电容罐子里的充电条：由 JS 设置 --charge（0～1），从左边涨上来 */
 .part .cap-fill{transform-origin:34px 86px;transform:scaleX(var(--charge,0));transition:transform .28s linear}
 .wire-color-chip{
