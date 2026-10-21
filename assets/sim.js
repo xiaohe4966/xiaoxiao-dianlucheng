@@ -324,15 +324,22 @@
           if (on) info.forwardV = vf;
           if (!on && (va - vc) < -0.4) info.reversed = true;
         } else if (e.kind === 'capacitor') {
-          /* 电容：存下来的电压留在两级之间；存电多少记录在 caps 里 */
-          capsOut[p.id] = va - vc;
-          info.vdrop = va - vc;
+          /* 电容：运行时真充电（capOut 记下新的存电量）；
+             暂停 = 时间停了，存电量原样冻结（不把节点电压脑补成存电，否则
+             新电容在通电前就会被充满，示范「灯先亮后灭」就没戏了） */
           if (capDt > 0) {
+            capsOut[p.id] = va - vc;
             var g3 = Math.max(e.c || 0.0047, 1e-7) / capDt;
             var oldV = Number(capsIn[p.id]);
             if (!isFinite(oldV)) oldV = 0;
             I = g3 * ((va - vc) - oldV);
             info.conducting = Math.abs(I) > 1e-6;
+            info.vdrop = va - vc;
+          } else {
+            var sv = Number(capsIn[p.id]);
+            if (!isFinite(sv)) sv = 0;
+            capsOut[p.id] = sv;
+            info.vdrop = sv;
           }
         } else return;
         if (Math.abs(I) > Math.abs(info.current)) info.current = I;
@@ -417,6 +424,7 @@
     SHORT_A: SHORT_A,
     SHORT_MIN_A: SHORT_MIN_A,
     LOAD_TYPES: LOAD_TYPES,
+    CAP_DT: CAP_DT,
     LEAST_LOAD_A: LEAST_LOAD_A
   };
   global.CircuitSim = api;

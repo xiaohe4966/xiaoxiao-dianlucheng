@@ -125,7 +125,9 @@
       name: '光敏电阻', short: '光敏电阻', w: 150, h: 124,
       terms: [{ id: 'a', x: 10, y: 68 }, { id: 'b', x: 140, y: 68 }],
       model: function (p) {
-        var light = Number(p.props.light);
+        /* 自动感光时 p.light 每一拍都在变（存在 part 上，不进存档）；
+           没有它就用滑块值 props.light */
+        var light = (typeof p.light === 'number' && isFinite(p.light)) ? p.light : Number(p.props.light);
         if (!isFinite(light)) light = 50;
         light = Math.max(0, Math.min(100, light));
         var r = 200000 * Math.pow(800 / 200000, light / 100);
@@ -134,14 +136,14 @@
       spec: {
         maxW: 0.25,
         text: function (p) {
-          var light = Number(p.props.light);
+          var light = (typeof p.light === 'number' && isFinite(p.light)) ? p.light : Number(p.props.light);
           if (!isFinite(light)) light = 50;
           var r = 200000 * Math.pow(800 / 200000, Math.max(0, Math.min(100, light)) / 100);
           return '光照 ' + Math.round(light) + '% · 电阻约 ' + fmtR(Math.round(r)) + ' · 额定 1/4W';
         }
       },
       art: function (p) {
-        var light = Number(p.props.light);
+        var light = (typeof p.light === 'number' && isFinite(p.light)) ? p.light : Number(p.props.light);
         if (!isFinite(light)) light = 50;
         light = Math.max(0, Math.min(100, light));
         var r = 200000 * Math.pow(800 / 200000, light / 100);
@@ -151,13 +153,14 @@
           '<line x1="120" y1="68" x2="140" y2="68" stroke="' + LEAD + '" stroke-width="5" stroke-linecap="round"/>' +
           '<rect x="30" y="50" width="90" height="36" rx="9" fill="#f3e3b8" stroke="#1f2a3a" stroke-width="3"/>' +
           '<path d="M40 68 q6 -10 12 0 q6 10 12 0 q6 -10 12 0 q6 10 12 0 q6 -10 12 0 q6 10 12 0" fill="none" stroke="#b45309" stroke-width="3" stroke-linecap="round"/>' +
-          '<g opacity="' + (0.2 + light / 140).toFixed(2) + '">' +
+          /* 太阳的亮度由 --lg（0～100）驱动，自动感光时不用重建整个零件 */
+          '<g class="ldr-sun" style="--lg:' + light.toFixed(1) + '">' +
           '<circle cx="47" cy="33" r="7" fill="#ffd166"/>' +
           '<line x1="47" y1="19" x2="47" y2="12" stroke="#f59e0b" stroke-width="3" stroke-linecap="round"/>' +
           '<line x1="33" y1="33" x2="26" y2="33" stroke="#f59e0b" stroke-width="3" stroke-linecap="round"/>' +
           '<line x1="61" y1="33" x2="68" y2="33" stroke="#f59e0b" stroke-width="3" stroke-linecap="round"/></g>' +
-          '<text x="75" y="101" text-anchor="middle" font-size="11" font-weight="800" fill="#8a7857">☀ 光照 ' + Math.round(light) + '%</text>' +
-          '<text x="75" y="117" text-anchor="middle" font-size="12" font-weight="900" fill="#7a6a52">电阻约 ' + fmtR(Math.round(r)) + '</text>');
+          '<text class="ldr-light-read" x="75" y="101" text-anchor="middle" font-size="11" font-weight="800" fill="#8a7857">☀ 光照 ' + Math.round(light) + '%</text>' +
+          '<text class="ldr-r-read" x="75" y="117" text-anchor="middle" font-size="12" font-weight="900" fill="#7a6a52">电阻约 ' + fmtR(Math.round(r)) + '</text>');
       }
     },
 
@@ -495,8 +498,8 @@
     },
     ldr: {
       what: '光敏电阻会「看」光线。光越亮，它的电阻越小；光越暗，电阻越大。',
-      how: '两个接线柱没有方向，像普通电阻一样串在电路里。点中它，拖动「光照」滑块，就能模拟天黑和天亮。',
-      tip: '暗处电阻大约 200 千欧，强光下只有 800 欧左右，相差两百多倍。它也能承受 1/4 瓦；用它和 LED 串起来，就能做一盏天黑才亮的小夜灯。'
+      how: '两个接线柱没有方向，像普通电阻一样串在电路里。点中它，拖动「光照」滑块就能手动调；也可以选「跟着灯自动感光」，它就会自己看灯泡的亮度变化。',
+      tip: '暗处电阻大约 200 千欧，强光下只有 800 欧左右，相差两百多倍。它也能承受 1/4 瓦；用它和 LED 串起来，再打开「跟着灯自动感光」，就能做一盏会看天色的小夜灯。'
     },
     pot: {
       what: '可变电阻是一个能拧大拧小的减速带。电阻变小，电流变大，灯就更亮。',

@@ -1210,6 +1210,18 @@
         if (!isFinite(capCharge)) capCharge = info ? info.vdrop : 0;
         node.style.setProperty('--charge', Math.min(1, Math.abs(capCharge) / 6).toFixed(2));
       }
+      /* 光敏电阻：自动感光时每一拍刷新太阳亮度、光照%和阻值文字（不重建零件） */
+      if (p.type === 'ldr') {
+        var ldrLight = (typeof p.light === 'number' && isFinite(p.light)) ? p.light : Number(p.props.light);
+        if (!isFinite(ldrLight)) ldrLight = 50;
+        var sun = node.querySelector('.ldr-sun');
+        if (sun) sun.style.setProperty('--lg', Math.max(0, Math.min(100, ldrLight)).toFixed(1));
+        var lr2 = Math.round(Number(PARTS.ldr.model(p).r) || 0);
+        var lt2 = node.querySelector('.ldr-light-read');
+        if (lt2) lt2.textContent = '☀ 光照 ' + Math.round(ldrLight) + '%';
+        var rt2 = node.querySelector('.ldr-r-read');
+        if (rt2) rt2.textContent = '电阻约 ' + App.fmtRes(lr2);
+      }
       /* 电流表和电压表上的数字：断电时显示 0 */
       if (p.type === 'ammeter' || p.type === 'voltmeter') {
         var read = node.querySelector('.meter-read');
@@ -1669,6 +1681,15 @@
         dir.textContent = Math.abs(c) < 0.002 ? '停着' : (c > 0 ? '正转 ⟳' : '反转 ⟲');
       }
     }
+    if (part0 && part0.type === 'ldr') {
+      var ld = PARTS.ldr.model(part0);
+      var ldrR2 = Math.round(Number(ld ? ld.r : 0) || 0);
+      var ll = Math.round(Math.max(0, Math.min(100, (typeof part0.light === 'number' && isFinite(part0.light)) ? part0.light : Number(part0.props.light) || 50)));
+      var lv = body.querySelector('[data-live="light"]');
+      if (lv) lv.textContent = ll + '%';
+      var lvR = body.querySelector('[data-live="ldrR"]');
+      if (lvR) lvR.textContent = App.fmtRes(ldrR2);
+    }
     if (part0 && part0.type === 'cap') {
       var capV = App.state.caps ? App.state.caps[part0.id] : null;
       if (!isFinite(capV)) capV = info.vdrop || 0;
@@ -1783,16 +1804,21 @@
         '<div class="opt-row"><button class="opt" id="insDischarge">🫗 放掉电</button></div>' +
         '<p class="inspect-desc">存电本领大的电容，充电时灯亮得久一点。想再看一次灯闪，点上面的「放掉电」。</p>';
     } else if (part.type === 'ldr') {
-      var lightNow = Number(part.props.light);
+      var lightNow = (typeof part.light === 'number' && isFinite(part.light)) ? part.light : Number(part.props.light);
       if (!(lightNow >= 0)) lightNow = 50;
       var ldrR = Math.round(Number(PARTS.ldr.model(part).r) || 0);
+      var autoOn = part.props.auto === true;
       html += '<div class="pot-row">' +
         '<div class="pot-slider">' +
-        '<input type="range" id="ldrRange" data-part="' + part.id + '" min="0" max="100" step="1" value="' + lightNow + '" aria-label="拖动改变光照强度">' +
+        '<input type="range" id="ldrRange" data-part="' + part.id + '" min="0" max="100" step="1" value="' + Math.round(lightNow) + '"' + (autoOn ? ' disabled' : '') + ' aria-label="拖动改变光照强度">' +
         '<div class="pot-scale"><span>🌑 很暗</span><span>☀️ 很亮</span></div>' +
         '</div>' +
-        '<span class="pot-val" id="ldrVal">' + lightNow + '%<br>' + App.fmtRes(ldrR) + '</span></div>' +
-        '<p class="inspect-desc">光越亮，光敏电阻的阻值越小。把它和 LED 串起来，就能做一个「天黑才亮」的小灯。</p>';
+        '<span class="pot-val" id="ldrVal">' + Math.round(lightNow) + '%<br>' + App.fmtRes(ldrR) + '</span></div>' +
+        '<div class="readout"><span>光照 <b data-live="light">' + Math.round(lightNow) + '%</b></span>' +
+        '<span>电阻 <b data-live="ldrR">' + App.fmtRes(ldrR) + '</b></span></div>' +
+        '<div class="opt-row"><button class="opt' + (autoOn ? ' on' : '') + '" id="ldrAutoBtn">' +
+        (autoOn ? '🖐️ 已跟着灯自动感光 · 点我改回手动调滑块' : '☀️ 让它跟着灯自动感光') + '</button></div>' +
+        '<p class="inspect-desc">光越亮，光敏电阻的阻值越小。选「跟着灯自动感光」后，它会自己看旁边灯泡、LED 的亮度变化；把它的滑块拖一下，就会变回手动。把它和 LED 串起来，就能做一个「天黑才亮」的小灯。</p>';
     } else if (part.type === 'pot') {
       var rv = Number(part.props.resistance);
       if (!(rv >= 0)) rv = 500;
@@ -1872,6 +1898,7 @@
       on(ldrRange, 'input', function () {
         var light = Number(ldrRange.value);
         if (!ldrDirty && light !== Number(part.props.light)) { ldrDirty = true; App.pushHistory(); }
+        if (part.props.auto) { part.props.auto = false; }   /* 拖滑块 = 手动控制 */
         part.props.light = light;
         var lab = $('ldrVal');
         if (lab) lab.innerHTML = part.props.light + '%<br>' + App.fmtRes(Math.round(Number(PARTS.ldr.model(part).r) || 0));
@@ -1883,6 +1910,15 @@
       on(ldrRange, 'pointercancel', settleLdr);
       on(ldrRange, 'keyup', function (e) { if (QUICK_KEYS[e.key]) settleLdr(); });
       on(ldrRange, 'blur', settleLdr);
+    }
+    /* 光敏电阻：跟着灯自动感光的开关 */
+    var ldrAutoBtn = $('ldrAutoBtn');
+    if (ldrAutoBtn) {
+      on(ldrAutoBtn, 'click', function () {
+        App.setLdrAuto(part.id, part.props.auto !== true);
+        lastInspectKey = '';
+        renderInspector();
+      });
     }
     /* 电阻：自己填一个阻值（1Ω～1MΩ） */
     var resInput = $('resInput');
@@ -2029,13 +2065,17 @@
       return '<button type="button" class="pq-btn" id="qMotorRev" data-qkeep="motor-rev">🔄 调换两根线，反转电机</button>';
     }
     if (part.type === 'ldr') {
-      var light = Number(p.light);
+      var autoQon = p.auto === true;
+      var light = (typeof part.light === 'number' && isFinite(part.light)) ? part.light : Number(p.light);
       if (!(light >= 0)) light = 50;
       light = Math.max(0, Math.min(100, Math.round(light)));
       var lr = Number(PARTS.ldr.model(part).r) || 0;
-      return '<div class="pq-slider"><span class="pq-side" aria-hidden="true">🌑</span>' +
-        '<input type="range" id="qLdrRange" data-qkeep="ldr-range" min="0" max="100" step="1" value="' + light +
-        '" aria-label="光照强度" aria-valuetext="光照 ' + light + '%，电阻约 ' + App.fmtRes(Math.round(lr)) + '">' +
+      return '<button type="button" class="pq-toggle' + (autoQon ? ' on' : '') + '" id="qLdrAuto" data-qkeep="ldr-auto" aria-pressed="' +
+        (autoQon ? 'true' : 'false') + '"><span class="pq-led" aria-hidden="true"></span><span>' +
+        (autoQon ? '☀️ 已跟着灯自动感光 · 点我手动' : '☀️ 跟着灯自动感光 · 点我打开') + '</span></button>' +
+        '<div class="pq-slider' + (autoQon ? ' off' : '') + '"><span class="pq-side" aria-hidden="true">🌑</span>' +
+        '<input type="range" id="qLdrRange" data-qkeep="ldr-range" min="0" max="100" step="1" value="' + light + '"' + (autoQon ? ' disabled' : '') +
+        ' aria-label="光照强度" aria-valuetext="光照 ' + light + '%，电阻约 ' + App.fmtRes(Math.round(lr)) + '">' +
         '<span class="pq-side" aria-hidden="true">☀️</span></div>' +
         '<div class="pq-scale"><span>很暗</span><span>很亮</span></div>' +
         '<div class="pq-live"><b id="qLdrLight">光照 ' + light + '%</b><span id="qLdrRes">电阻约 ' + App.fmtRes(Math.round(lr)) + '</span></div>';
@@ -2088,12 +2128,21 @@
         if (label) label.textContent = closed ? '已合上 · 点我断开' : '已断开 · 点我合上';
       }
     } else if (part.type === 'ldr') {
-      var light = Number(p.light);
+      var autoOn2 = p.auto === true;
+      var light = (typeof part.light === 'number' && isFinite(part.light)) ? part.light : Number(p.light);
       if (!(light >= 0)) light = 50;
       light = Math.max(0, Math.min(100, Math.round(light)));
       var rr = Math.round(Number(PARTS.ldr.model(part).r) || 0);
+      var qauto = node.querySelector('#qLdrAuto');
+      if (qauto) {
+        qauto.classList.toggle('on', autoOn2);
+        qauto.setAttribute('aria-pressed', autoOn2 ? 'true' : 'false');
+        var qlabel = qauto.lastElementChild;
+        if (qlabel) qlabel.textContent = autoOn2 ? '☀️ 已跟着灯自动感光 · 点我手动' : '☀️ 跟着灯自动感光 · 点我打开';
+      }
       var range = node.querySelector('#qLdrRange');
       if (range) {
+        range.disabled = autoOn2;
         if (document.activeElement !== range) range.value = light;
         range.setAttribute('aria-valuetext', '光照 ' + light + '%，电阻约 ' + App.fmtRes(rr));
       }
@@ -2145,6 +2194,12 @@
     if (sw) on(sw, 'click', function () { toggleSwitch(part); });
     var mr = node.querySelector('#qMotorRev');
     if (mr) on(mr, 'click', function () { reverseMotorWires(part); });
+    var qLdrAuto = node.querySelector('#qLdrAuto');
+    if (qLdrAuto) {
+      on(qLdrAuto, 'click', function () {
+        App.setLdrAuto(part.id, part.props.auto !== true);
+      });
+    }
     var ldrRange = node.querySelector('#qLdrRange');
     if (ldrRange) {
       var ldrDirty = false;
@@ -2166,6 +2221,7 @@
       on(ldrRange, 'input', function () {
         var light = Number(ldrRange.value);
         beginLdr(light);
+        if (part.props.auto) { part.props.auto = false; }   /* 拖滑块 = 手动控制 */
         part.props.light = light;
         var rr = Math.round(Number(PARTS.ldr.model(part).r) || 0);
         var lab = node.querySelector('#qLdrLight');

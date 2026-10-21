@@ -321,6 +321,64 @@
     UI.speak('电线换成' + label + '啦。');
     return color;
   }
+
+  /* ---------- 光敏电阻自动感光 ----------
+     打开 props.auto 后，每一拍都用「上一拍灯泡 / LED 的亮度 + 距离」算出
+     光敏电阻头顶的光照，实现「灯亮它变亮、灯灭它变暗」的自动小夜灯。
+     手动模式（默认）光照永远等于滑块值，不进撤销历史，直接 commit 保存。 */
+  function setLdrAuto(id, on) {
+    var p = byId(id);
+    if (!p || p.type !== 'ldr') return false;
+    var next = !!on;
+    if (!!p.props.auto === next) return next;
+    p.props.auto = next;
+    commit();
+    evaluate();
+    UI.toast(next ? '光敏电阻开始跟着灯自动感光 ☀️' : '光敏电阻改成手动调光照 🖐️', 'good');
+    UI.speak(next
+      ? '好啦，光敏电阻会自己看灯泡的光，灯亮它就变亮，灯灭它就变暗。'
+      : '光敏电阻改成手动调光照啦，拖滑块就能自己决定多亮。');
+    return next;
+  }
+  function updateLdrLight() {
+    state.parts.forEach(function (p) {
+      if (p.type !== 'ldr') return;
+      if (p.props.auto !== true) {
+        /* 手动：光照 = 滑块值，同时写回 p.light，让模型/外观统一 */
+        var mp = Number(p.props.light);
+        if (!isFinite(mp)) mp = 50;
+        p.light = Math.max(0, Math.min(100, mp));
+        return;
+      }
+      var old = typeof p.light === 'number' && isFinite(p.light) ? p.light : 50;
+      var pd = defOf(p);
+      if (!state.running) {
+        /* 断电 = 所有灯都熄了：自动感光直接回到房间暗度（暂停没有心跳可以渐变） */
+        p.light = 12;
+        return;
+      }
+      var lcx = p.x + pd.w / 2, lcy = p.y + pd.h / 2;
+      var best = 0;
+      state.parts.forEach(function (q) {
+        if (q.type !== 'lamp' && q.type !== 'led') return;
+        var info = state.sim && state.sim.parts[q.id];
+        var bright = 0;
+        if (info) {
+          if (typeof info.brightness === 'number') bright = info.brightness;
+          else if (q.type === 'led') bright = Math.min(1.25, Math.abs(info.current) / 0.012);
+        }
+        if (bright <= 0.02) return;
+        var qd = defOf(q);
+        var dx = (q.x + qd.w / 2) - lcx, dy = (q.y + qd.h / 2) - lcy;
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist >= 340) return;
+        var f = (bright / 1.35) * (1 - dist / 340);
+        if (f > best) best = f;
+      });
+      var target = 12 + 84 * Math.min(1, best);   /* 暗处 12%，强光最高 96% */
+      p.light = Math.max(0, Math.min(100, old + 0.45 * (target - old)));
+    });
+  }
   function backupCurrent() {
     try { localStorage.setItem(BACKUP_KEY, snapshot()); } catch (e) {}
   }
@@ -689,6 +747,9 @@
       if (h >= 1) burn(p, st);
     });
     UI.updateHeat();
+    /* 通电时每 0.12 秒把电路往前推一小拍：
+       电容继续充电、光敏电阻继续感光，电流才像真的在流动。 */
+    evaluate();
   }
   function startHeatTimer() {
     stopHeatTimer();
@@ -730,6 +791,7 @@
     UI.refreshFromSim();
     UI.updateHeat();
     UI.updatePanels();
+    evaluate();   /* 断电也要解一次：自动感光的光照、电容存电状态都更新到位 */
     UI.speak('断电啦。');
   }
   function toggleRun() { state.running ? stopRun() : startRun(); }
@@ -940,6 +1002,7 @@
 
   function evaluate() {
     if (state.exploding) return;
+    updateLdrLight();   /* 自动感光要在解电路之前算，模型里才能用到最新的光照 */
     var sim = CircuitSim.simulate({
       parts: state.parts, wires: state.wires,
       defOf: defOf, diodeState: state.diodeState, burnt: state.burnt,
@@ -1628,6 +1691,7 @@
     startRun: startRun, stopRun: stopRun, toggleRun: toggleRun, setRunUI: setRunUI,
     loadPreset: loadPreset, loadCase: loadCase, audio: audio, init: init, setWireStyle: setWireStyle,
     setWireColor: setWireColor, wireColors: WIRE_COLORS,
+    setLdrAuto: setLdrAuto,
     setWireLabels: setWireLabels,
     recordMeasurement: recordMeasurement, clearLog: clearLog,
     dischargeCap: dischargeCap,
