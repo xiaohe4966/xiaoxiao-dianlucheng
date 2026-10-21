@@ -154,3 +154,94 @@ test('烧坏的零件不导电，短路随之消失', () => {
   );
   assert.equal(r.short, false);
 });
+
+/* ---------- 电容：充电、挡直流、暂停冻结、冲击 ---------- */
+
+function capSeries(dt, capsIn) {
+  return sim.simulate({
+    parts: [battery(), part('c1', 'cap', { uF: 4700 }), part('l1', 'lamp')],
+    wires: [
+      wire('w1', 'b1', 'pos', 'c1', 'a'),
+      wire('w2', 'c1', 'b', 'l1', 'a'),
+      wire('w3', 'l1', 'b', 'b1', 'neg')
+    ],
+    defOf: p => PARTS[p.type],
+    diodeState: {},
+    burnt: {},
+    caps: capsIn || {},
+    dt
+  });
+}
+
+test('电容充电是渐进的：一拍只充一部分，电流越来越小', () => {
+  let caps = {};
+  let prevI = Infinity;
+  let signs = { rising: 0, falling: 0 };
+  for (let k = 0; k < 14; k++) {
+    const r = capSeries(sim.CAP_DT, caps);
+    const v = r.caps.c1;
+    const i = r.parts.l1.current;
+    if (k > 0) {
+      if (v < 3) signs.rising++;
+      if (i < prevI) signs.falling++;
+      assert.ok(v < 3, '充电中存电要低于电池电压');
+      assert.ok(i > 0 && i < 0.05, '充电电流保持在合理范围');
+    }
+    prevI = i;
+    caps = r.caps;
+  }
+  assert.ok(signs.rising >= 12, '存电一路上不去会怪');
+  assert.ok(signs.falling >= 12, '电流一路下不来会怪');
+});
+
+test('电容充满后挡住直流：电流趋近 0，存电接近电池电压', () => {
+  let caps = {};
+  for (let k = 0; k < 28; k++) caps = capSeries(sim.CAP_DT, caps).caps;
+  const last = capSeries(sim.CAP_DT, caps);
+  assert.ok(last.caps.c1 > 2.85, '存电应该几乎充满');
+  assert.ok(Math.abs(last.parts.l1.current) < 0.0005, '挡住直流后电流几乎为 0');
+  assert.ok(Math.abs(last.batteries[0].current) < 0.0005);
+});
+
+test('暂停（dt=0）时电容冻结存电量：不充电也不放电', () => {
+  const r = capSeries(0, { c1: 2.5 });
+  assert.equal(r.caps.c1, 2.5, '存电量一个字都不变');
+  assert.ok(Math.abs(r.parts.l1.current) < 1e-9, '时间停了，电流也停了');
+  assert.equal(r.short, false);
+
+  const fresh = capSeries(0, {});
+  assert.equal(fresh.caps.c1, 0, '没充过电的新电容不会凭空带电');
+});
+
+test('大电容直接并在电池两头：第一拍拉大电流想短路，存满就恢复安静', () => {
+  const parts4cap = () => ([
+    battery('b1', 3), part('c1', 'cap', { uF: 10000 }),
+    part('c2', 'cap', { uF: 10000 }), part('c3', 'cap', { uF: 10000 }),
+    part('c4', 'cap', { uF: 10000 })
+  ]);
+  const w4 = () => ([
+    wire('w1', 'b1', 'pos', 'c1', 'a'), wire('w2', 'c1', 'b', 'b1', 'neg'),
+    wire('w3', 'b1', 'pos', 'c2', 'a'), wire('w4', 'c2', 'b', 'b1', 'neg'),
+    wire('w5', 'b1', 'pos', 'c3', 'a'), wire('w6', 'c3', 'b', 'b1', 'neg'),
+    wire('w7', 'b1', 'pos', 'c4', 'a'), wire('w8', 'c4', 'b', 'b1', 'neg')
+  ]);
+  let caps = {};
+  const first = sim.simulate({ parts: parts4cap(), wires: w4(), defOf: p => PARTS[p.type], diodeState: {}, burnt: {}, caps: {}, dt: sim.CAP_DT });
+  /* 第一拍：电容像一根粗电线，电流一下子很大，还会触发「没有用电器」的提醒 */
+  assert.equal(first.short, true);
+  assert.equal(first.shortInfo.kind, 'noload');
+  assert.ok(first.totalCurrent > 0.5, '第一股充电电流很大：' + first.totalCurrent.toFixed(3));
+  // 充几拍以后电流应当掉下来（存满了就不冲了，也不再报警）
+  let last;
+  for (let k = 0; k < 12; k++) {
+    last = sim.simulate({ parts: parts4cap(), wires: w4(), defOf: p => PARTS[p.type], diodeState: {}, burnt: {}, caps: caps, dt: sim.CAP_DT });
+    caps = last.caps;
+  }
+  assert.equal(last.short, false, '存满后不再报警');
+  assert.ok(Math.abs(last.totalCurrent) < 0.02, '存满后总电流几乎为 0：' + last.totalCurrent.toFixed(4));
+  assert.ok(last.caps.c1 > 2.8 && Math.abs(last.caps.c1 - last.caps.c4) < 0.05, '四颗电容都要充到差不多的电压');
+});
+
+test('电容永远不烧坏（没有额定电流/额定功率上限）', () => {
+  assert.ok(!PARTS.cap.spec.maxA && !PARTS.cap.spec.maxW, '电容不该有 maxA/maxW');
+});
